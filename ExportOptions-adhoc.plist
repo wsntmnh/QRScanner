@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Ad Hoc 分发：安装设备的 UDID 必须先注册到开发者账号（每年最多 100 台） -->
+	<key>method</key>
+	<string>ad-hoc</string>
+	<key>destination</key>
+	<string>export</string>
+	<key>signingStyle</key>
+	<string>automatic</string>
+	<key>teamID</key>
+	<string>J9J58F83KN</string>
+	<key>stripSwiftSymbols</key>
+	<true/>
+	<key>compileBitcode</key>
+	<false/>
+	<key>thinning</key>
+	<string>&lt;none&gt;</string>
+</dict>
+</plist>
