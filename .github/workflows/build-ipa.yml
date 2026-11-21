@@ -1,0 +1,50 @@
+name: Build unsigned IPA
+
+# 在没有本地 Xcode 的机器上，用 GitHub 的 macOS 构建机产出未签名 IPA，
+# 再交给 Sideloadly / AltStore 用 Apple ID 自签安装。
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          xcodebuild -list -project QRScanner.xcodeproj
+
+      - name: Build (unsigned)
+        run: |
+          xcodebuild -project QRScanner.xcodeproj \
+            -scheme QRScanner \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build/dd \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Package Payload into IPA
+        run: |
+          mkdir -p build/Payload
+          cp -R build/dd/Build/Products/Release-iphoneos/QRScanner.app build/Payload/
+          cd build
+          zip -qr QRScanner-unsigned.ipa Payload
+          ls -lh QRScanner-unsigned.ipa
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: QRScanner-unsigned-ipa
+          path: build/QRScanner-unsigned.ipa
+          retention-days: 30
