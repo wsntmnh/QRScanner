@@ -1,0 +1,11 @@
+# Xcode 构建产物
+build/
+DerivedData/
+*.xcarchive
+*.ipa
+
+# 个人 Xcode 状态（避免把本地 scheme/断点等带上仓库）
+xcuserdata/
+*.xcuserstate
+
+.DS_Store
