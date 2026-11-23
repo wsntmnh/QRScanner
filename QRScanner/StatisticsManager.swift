@@ -93,11 +93,6 @@ class StatisticsManager: ObservableObject {
         return result
     }
 
-    /// 近 90 天（保留期内）扫描总次数
-    func totalScans() -> Int {
-        return serialQueue.sync { self._dailyData.values.reduce(0, +) }
-    }
-
     /// 今日扫描次数
     func todayScans() -> Int {
         let key = dayKey(for: Date())
