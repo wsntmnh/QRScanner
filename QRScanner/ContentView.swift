@@ -34,6 +34,10 @@ struct ContentView: View {
     @State private var selectedLensIndex = 0
     @State private var isFrontCamera = false
 
+    // 对焦方式：自动 / 手动（0 = 最近，1 = 无穷远）
+    @State private var manualFocus = false
+    @State private var focusPosition: Double = 0.5
+
     var body: some View {
         ZStack {
             ScannerWrapperView(onScan: { result, symbology in
@@ -87,6 +91,56 @@ struct ContentView: View {
             // 底部工具栏
             VStack {
                 Spacer()
+
+                // 对焦方式：自动 / 手动（手动时用滑杆控制焦距）
+                HStack(spacing: 10) {
+                    Button {
+                        if manualFocus {
+                            manualFocus = false
+                            scannerController?.setManualFocus(enabled: false)
+                        } else {
+                            guard let controller = scannerController, controller.supportsManualFocus else {
+                                showError(message: "当前设备不支持手动对焦")
+                                return
+                            }
+                            manualFocus = true
+                            controller.setManualFocus(enabled: true)
+                            controller.setManualFocusPosition(Float(focusPosition))
+                        }
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: manualFocus ? "hand.point.up.left.fill" : "viewfinder")
+                                .font(.system(size: 11))
+                            Text(manualFocus ? "手动" : "自动")
+                                .font(.system(size: 11, weight: .semibold))
+                        }
+                        .foregroundColor(manualFocus ? .yellow : .white)
+                        .padding(.horizontal, 10)
+                        .frame(height: 30)
+                        .background(Capsule().fill(Color.black.opacity(0.4)))
+                    }
+
+                    if manualFocus {
+                        HStack(spacing: 6) {
+                            Text("近")
+                                .font(.system(size: 10))
+                                .foregroundColor(.white.opacity(0.65))
+                            Slider(value: $focusPosition, in: 0...1)
+                                .frame(width: 160)
+                                .tint(.yellow)
+                                .onChange(of: focusPosition) { _, newValue in
+                                    scannerController?.setManualFocusPosition(Float(newValue))
+                                }
+                            Text("远")
+                                .font(.system(size: 10))
+                                .foregroundColor(.white.opacity(0.65))
+                        }
+                        .padding(.horizontal, 10)
+                        .frame(height: 34)
+                        .background(Capsule().fill(Color.black.opacity(0.4)))
+                    }
+                }
+                .padding(.bottom, 10)
 
                 // 镜头切换（与系统相机一致）：后置 0.5x / 1x / 3x 档位 + 前后切换
                 if !lensTitles.isEmpty {
