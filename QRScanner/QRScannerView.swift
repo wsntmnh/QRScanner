@@ -29,12 +29,9 @@ class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsD
     private var currentVideoInput: AVCaptureDeviceInput?
     /// 后置镜头组：标题（0.5x/1x/3x…）、设备、相对广角的倍率，按倍率升序
     private var rearLenses: [(title: String, device: AVCaptureDevice, zoom: CGFloat)] = []
-    /// 前置镜头（多数机型没有闪光灯、也不支持部分码制）
-    private var frontLens: AVCaptureDevice?
     private var currentRearIndex = 0
-    private var isFrontCamera = false
-    /// 镜头列表/选中项/是否前置发生变化时回调给 SwiftUI
-    var onLensesChanged: (([String], Int, Bool) -> Void)?
+    /// 镜头列表/选中项发生变化时回调给 SwiftUI
+    var onLensesChanged: (([String], Int) -> Void)?
     /// 串行化会话重配置，避免多次快速切换互相打断
     private let sessionQueue = DispatchQueue(label: "com.shidongliang.qrscanner.session", qos: .userInitiated)
 
@@ -185,35 +182,25 @@ class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsD
         }
     }
 
-    // MARK: - 镜头切换（后置多档 / 前后）
+    // MARK: - 镜头切换（后置多档）
     /// 选择某个后置档位（0.5x / 1x / 2x / 3x）
     func selectRearLens(index: Int) {
         guard index >= 0, index < rearLenses.count else { return }
         let target = rearLenses[index].device
         currentRearIndex = index
-        if isFrontCamera || target != device {
-            switchCamera(to: target, front: false)
+        if target != device {
+            switchCamera(to: target)
         } else {
             // 已经在该档位，只需同步 UI 选中态
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
-                self.onLensesChanged?(self.rearLenses.map { $0.title }, index, false)
+                self.onLensesChanged?(self.rearLenses.map { $0.title }, index)
             }
         }
     }
 
-    /// 前后摄像头切换
-    func flipCamera() {
-        if isFrontCamera {
-            guard currentRearIndex < rearLenses.count else { return }
-            switchCamera(to: rearLenses[currentRearIndex].device, front: false)
-        } else if let front = frontLens {
-            switchCamera(to: front, front: true)
-        }
-    }
-
     /// 重建相机输入：移除旧 input → 添加新 input → 重新求可用码制交集
-    private func switchCamera(to newDevice: AVCaptureDevice, front: Bool) {
+    private func switchCamera(to newDevice: AVCaptureDevice) {
         sessionQueue.async { [weak self] in
             guard let self = self, let session = self.captureSession else { return }
             let previousDevice = self.device
@@ -253,7 +240,6 @@ class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsD
 
             if applied {
                 self.device = newDevice
-                self.isFrontCamera = front
                 self.scanLock.lock()
                 self.hasScanned = false
                 self.scanLock.unlock()
@@ -262,16 +248,7 @@ class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsD
             }
 
             DispatchQueue.main.async {
-                // 前置预览按镜像显示，和系统相机一致
-                self.previewLayer?.connection?.automaticallyAdjustsVideoMirroring = false
-                self.previewLayer?.connection?.isVideoMirrored = front
-                if front {
-                    // 前置没有闪光灯/手电筒，强制同步关闭状态
-                    NotificationCenter.default.post(
-                        name: Self.torchStateDidChangeNotification, object: nil, userInfo: ["isOn": false]
-                    )
-                }
-                self.onLensesChanged?(self.rearLenses.map { $0.title }, self.currentRearIndex, self.isFrontCamera)
+                self.onLensesChanged?(self.rearLenses.map { $0.title }, self.currentRearIndex)
             }
         }
     }
@@ -387,7 +364,6 @@ class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsD
         self.rearLenses = rear
         self.currentRearIndex = rear.firstIndex(where: { $0.device == defaultLens.device }) ?? 0
         self.device = defaultLens.device
-        self.frontLens = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front)
 
         do {
             let input = try AVCaptureDeviceInput(device: defaultLens.device)
@@ -440,7 +416,7 @@ class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsD
         // 告诉 UI：当前设备支持哪些档位
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
-            self.onLensesChanged?(self.rearLenses.map { $0.title }, self.currentRearIndex, false)
+            self.onLensesChanged?(self.rearLenses.map { $0.title }, self.currentRearIndex)
         }
     }
 
