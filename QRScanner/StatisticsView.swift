@@ -8,45 +8,35 @@
 import SwiftUI
 
 struct StatisticsView: View {
-    @Environment(\.dismiss) private var dismiss
     @StateObject private var statsManager = StatisticsManager.shared
     @State private var selectedTab = 0
     @State private var dailyRange = 7
 
     var body: some View {
-        NavigationView {
-            ScrollView {
-                VStack(spacing: 20) {
-                    // 统计摘要卡片
-                    summaryCards
+        ScrollView {
+            VStack(spacing: 20) {
+                // 统计摘要卡片
+                summaryCards
 
-                    // 分段控制器
-                    Picker("统计维度", selection: $selectedTab) {
-                        Text("今日每小时").tag(0)
-                        Text("每日趋势").tag(1)
-                    }
-                    .pickerStyle(SegmentedPickerStyle())
-                    .padding(.horizontal)
-
-                    if selectedTab == 0 {
-                        hourlyChartSection
-                    } else {
-                        dailyChartSection
-                    }
+                // 分段控制器
+                Picker("统计维度", selection: $selectedTab) {
+                    Text("今日每小时").tag(0)
+                    Text("每日趋势").tag(1)
                 }
-                .padding(.vertical)
-            }
-            .background(Color(.systemGroupedBackground).ignoresSafeArea())
-            .navigationTitle("扫描统计")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("完成") {
-                        dismiss()
-                    }
+                .pickerStyle(SegmentedPickerStyle())
+                .padding(.horizontal)
+
+                if selectedTab == 0 {
+                    hourlyChartSection
+                } else {
+                    dailyChartSection
                 }
             }
+            .padding(.vertical)
         }
+        .background(Color(.systemGroupedBackground).ignoresSafeArea())
+        .navigationTitle("扫描统计")
+        .navigationBarTitleDisplayMode(.inline)
     }
 
     // MARK: - 统计摘要卡片
