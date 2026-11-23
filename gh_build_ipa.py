@@ -168,10 +168,17 @@ def main():
 
     out_zip = ROOT / "build" / "QRScanner-unsigned-ipa.zip"
     out_zip.parent.mkdir(parents=True, exist_ok=True)
-    code, blob = call("GET", target["archive_download_url"], tok, raw=True)
-    if code != 200:
-        sys.exit(f"❌ 下载 artifact 失败 {code}: {blob}")
-    out_zip.write_bytes(blob)
+    # artifact 下载会 302 到 Azure Blob，urllib 转发 Authorization 会被拒（401），改用 curl -L
+    import subprocess
+    if out_zip.exists():
+        out_zip.unlink()
+    subprocess.run(
+        ["curl", "-sL", "-H", f"Authorization: Bearer {tok}",
+         target["archive_download_url"], "-o", str(out_zip)],
+        check=False,
+    )
+    if not out_zip.exists() or out_zip.stat().st_size < 1024:
+        sys.exit("❌ 下载 artifact 失败（检查网络或 token 权限）")
     print(f"✅ 已下载: {out_zip}")
 
     # 6) 解压
