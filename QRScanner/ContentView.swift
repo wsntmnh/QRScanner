@@ -20,7 +20,6 @@ struct ContentView: View {
     @State private var isTorchOn = false
     @State private var scannerController: QRScannerViewController?
     @State private var showSettings = false
-    @State private var showStatistics = false
     @State private var lastScanSource: ScanRecord.ScanSource = .camera
 
     // 照片预览
@@ -57,23 +56,10 @@ struct ContentView: View {
             ScanLineOverlay()
                 .allowsHitTesting(false)
 
-            // 顶部按钮栏
+            // 顶部按钮栏（统计入口已移入设置页，这里只留设置）
             VStack {
                 HStack {
                     Spacer()
-                    Button(action: {
-                        showStatistics = true
-                    }) {
-                        Image(systemName: "chart.bar.fill")
-                            .font(.system(size: 20))
-                            .foregroundColor(.white)
-                            .frame(width: 44, height: 44)
-                            .background(Color.black.opacity(0.4))
-                            .clipShape(Circle())
-                    }
-                    .padding(.top, 12)
-                    .padding(.trailing, 8)
-
                     Button(action: {
                         showSettings = true
                     }) {
@@ -288,9 +274,6 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showSettings) {
             SettingsView()
-        }
-        .sheet(isPresented: $showStatistics) {
-            StatisticsView()
         }
         .alert("提示", isPresented: $showError) {
             Button("确定") {}
@@ -621,6 +604,7 @@ struct SettingsView: View {
     @ObservedObject private var settings = SettingsManager.shared
     @State private var showHistory = false
     @ObservedObject private var historyManager = HistoryManager.shared
+    @ObservedObject private var statsManager = StatisticsManager.shared
 
     var body: some View {
         NavigationView {
@@ -647,6 +631,27 @@ struct SettingsView: View {
                             Image(systemName: "chevron.right")
                                 .font(.system(size: 13, weight: .semibold))
                                 .foregroundColor(Color(.tertiaryLabel))
+                        }
+                    }
+                }
+
+                Section(header: Text("数据统计")) {
+                    NavigationLink {
+                        StatisticsView()
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "chart.bar.fill")
+                                .foregroundColor(.green)
+                                .frame(width: 28)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("扫描统计")
+                                    .font(.system(size: 16))
+                                    .foregroundColor(.primary)
+                                Text("今日 \(statsManager.todayTotal) 次 · 累计 \(statsManager.allTimeTotal) 次")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.secondary)
+                            }
+                            Spacer()
                         }
                     }
                 }
