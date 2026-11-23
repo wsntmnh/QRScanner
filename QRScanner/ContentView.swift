@@ -6,7 +6,6 @@
 //
 
 import SwiftUI
-import PhotosUI
 import Photos
 import Vision
 
@@ -763,7 +762,7 @@ struct SettingsView: View {
                     HStack {
                         Text("版本")
                         Spacer()
-                        Text("1.3.0")
+                        Text(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—")
                             .foregroundColor(.secondary)
                     }
 
