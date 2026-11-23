@@ -38,6 +38,18 @@ class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsD
     /// 串行化会话重配置，避免多次快速切换互相打断
     private let sessionQueue = DispatchQueue(label: "com.shidongliang.qrscanner.session", qos: .userInitiated)
 
+    // MARK: - 手动对焦
+    /// 是否处于手动对焦模式（true 时点按对焦失效，由滑杆控制）
+    private var isManualFocus = false
+    /// 手动焦距 0（最近）~ 1（无穷远）
+    private var manualFocusPosition: Float = 0.5
+    private var focusApplyWorkItem: DispatchWorkItem?
+
+    /// 当前设备是否支持自定义焦距锁定（绝大多数 iPhone 支持，少数外接/老设备不支持）
+    var supportsManualFocus: Bool {
+        device?.isLockingFocusWithCustomLensPositionSupported ?? false
+    }
+
     private let allSymbologies: [AVMetadataObject.ObjectType] = {
         var types: [AVMetadataObject.ObjectType] = [
             .qr, .aztec, .pdf417, .dataMatrix,
@@ -245,6 +257,8 @@ class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsD
                 self.scanLock.lock()
                 self.hasScanned = false
                 self.scanLock.unlock()
+                // 换了镜头后沿用当前对焦方式（手动焦距保持不变）
+                self.applyFocusMode(on: newDevice)
             }
 
             DispatchQueue.main.async {
@@ -259,6 +273,53 @@ class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsD
                 }
                 self.onLensesChanged?(self.rearLenses.map { $0.title }, self.currentRearIndex, self.isFrontCamera)
             }
+        }
+    }
+
+    // MARK: - 手动对焦
+    /// 切换对焦方式：true = 锁定手动焦距，false = 回到连续自动对焦
+    func setManualFocus(enabled: Bool) {
+        guard let device = device else { return }
+        if enabled && !device.isLockingFocusWithCustomLensPositionSupported {
+            // 设备不支持自定义焦距，保持自动，避免 UI 状态与实际不符
+            isManualFocus = false
+            applyFocusMode(on: device)
+            return
+        }
+        isManualFocus = enabled
+        applyFocusMode(on: device)
+    }
+
+    /// 滑杆拖动：0 = 最近（微距）… 1 = 无穷远
+    func setManualFocusPosition(_ position: Float) {
+        manualFocusPosition = min(max(position, 0), 1)
+        guard isManualFocus, let device = device,
+              device.isLockingFocusWithCustomLensPositionSupported else { return }
+        // 60ms 去抖：拖动会连续触发，避免高频 lockForConfiguration 卡顿
+        focusApplyWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self, weak device] in
+            guard let self = self, let device = device else { return }
+            do {
+                try device.lockForConfiguration()
+                device.setFocusModeLocked(lensPosition: self.manualFocusPosition, completionHandler: nil)
+                device.unlockForConfiguration()
+            } catch {}
+        }
+        focusApplyWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.06, execute: work)
+    }
+
+    private func applyFocusMode(on device: AVCaptureDevice) {
+        do {
+            try device.lockForConfiguration()
+            if isManualFocus, device.isLockingFocusWithCustomLensPositionSupported {
+                device.setFocusModeLocked(lensPosition: manualFocusPosition, completionHandler: nil)
+            } else if device.isFocusModeSupported(.continuousAutoFocus) {
+                device.focusMode = .continuousAutoFocus
+            }
+            device.unlockForConfiguration()
+        } catch {
+            print("设置对焦模式失败: \(error.localizedDescription)")
         }
     }
 
@@ -650,6 +711,8 @@ class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsD
 
     @objc private func handleTapToFocus(_ gesture: UITapGestureRecognizer) {
         guard gesture.state == .ended else { return }
+        // 手动对焦模式下由滑杆控制焦距，点按不再改焦
+        guard !isManualFocus else { return }
         guard let device = device, let previewLayer = previewLayer else { return }
 
         let point = gesture.location(in: view)
