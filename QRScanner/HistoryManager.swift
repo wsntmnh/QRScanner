@@ -32,13 +32,6 @@ class HistoryManager: ObservableObject {
         StatisticsManager.shared.incrementScanCount()
     }
 
-    func deleteRecord(at offsets: IndexSet) {
-        for index in offsets.sorted(by: >) {
-            records.remove(at: index)
-        }
-        saveRecords()
-    }
-
     func deleteRecord(_ record: ScanRecord) {
         records.removeAll { $0.id == record.id }
         saveRecords()
