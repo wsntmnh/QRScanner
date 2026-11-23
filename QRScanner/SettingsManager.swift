@@ -64,11 +64,14 @@ class SettingsManager: ObservableObject {
         var id: String { rawValue }
         
         /// AVCaptureSession 会话采集预设（相机预览流）
+        /// 关键：一维码最窄的条只有 1–2 像素宽，采集流低于 720p 时条码基本解不出来，
+        /// 所以低/中档不再使用 .low(192x144)/.medium(480x360)，统一抬到 720p / 1080p。
+        /// 高档与最高档直接用 .photo（全传感器分辨率），兼顾文字细节与远距离条码。
         var sessionPreset: AVCaptureSession.Preset {
             switch self {
-            case .low: return .low
-            case .medium: return .medium
-            case .high: return .high
+            case .low: return .hd1280x720
+            case .medium: return .hd1920x1080
+            case .high: return .photo
             case .photo: return .photo
             }
         }
@@ -103,7 +106,7 @@ class SettingsManager: ObservableObject {
         
         var description: String {
             switch self {
-            case .low: return "低清晰度，最长边1280像素，节省存储空间"
+            case .low: return "低清晰度，最长边1280像素（采集仍保持720p，不影响扫码）"
             case .medium: return "中等清晰度，最长边1920像素，平衡画质与体积"
             case .high: return "高清晰度，最长边3000像素，开启锐化"
             case .photo: return "最高清晰度，原始相机像素，开启锐化"
