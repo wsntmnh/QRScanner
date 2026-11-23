@@ -470,8 +470,19 @@ struct ContentView: View {
             do {
                 try handler.perform([request])
                 DispatchQueue.main.async {
-                    if let result = request.results?.first as? VNBarcodeObservation,
-                       let payload = result.payloadStringValue {
+                    let observations = (request.results ?? [])
+                        .compactMap { $0 as? VNBarcodeObservation }
+                        .filter { $0.payloadStringValue != nil }
+                    // 一张图可能有多处码（货架、包装照常见）：优先取识别框面积最大的那个，
+                    // 面积相同再看置信度。相比原先直接取 results.first，能避开角落的小码和误检
+                    let best = observations.max { lhs, rhs in
+                        let lhsArea = lhs.boundingBox.width * lhs.boundingBox.height
+                        let rhsArea = rhs.boundingBox.width * rhs.boundingBox.height
+                        if lhsArea == rhsArea { return lhs.confidence < rhs.confidence }
+                        return lhsArea < rhsArea
+                    }
+
+                    if let result = best, let payload = result.payloadStringValue {
                         let symbology = self.visionSymbologyName(result.symbology)
                         self.handleScanResult(result: payload, symbology: symbology, source: .photoLibrary)
                     } else {
