@@ -15,14 +15,12 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     /// 最近一次反解析得到的地址文字（如水印开关关闭或未定位则为 nil）
     @Published private(set) var currentAddress: String?
-    @Published private(set) var authorizationStatus: CLAuthorizationStatus
 
     private let manager: CLLocationManager
     private var lastGeocodeTime: Date?
 
     private override init() {
         self.manager = CLLocationManager()
-        self.authorizationStatus = manager.authorizationStatus
         
         super.init()
         
@@ -47,8 +45,8 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
     // MARK: - CLLocationManagerDelegate
 
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-        authorizationStatus = manager.authorizationStatus
-        if authorizationStatus == .authorizedWhenInUse || authorizationStatus == .authorizedAlways {
+        let status = manager.authorizationStatus
+        if status == .authorizedWhenInUse || status == .authorizedAlways {
             manager.startUpdatingLocation()
         }
     }
