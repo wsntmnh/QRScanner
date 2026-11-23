@@ -5,9 +5,8 @@
 //  Created by 史冬亮 on 2026/8/14.
 //
 
-import SwiftUI
+import UIKit
 import AVFoundation
-import Photos
 import AudioToolbox
 
 class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsDelegate, AVCapturePhotoCaptureDelegate {
@@ -142,12 +141,6 @@ class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsD
                 self?.captureSession?.startRunning()
             }
         }
-    }
-
-    override func viewWillDisappear(_ animated: Bool) {
-        super.viewWillDisappear(animated)
-        // 修复：不再因弹出 sheet（设置/历史/统计）而停止相机，
-        // 相机只在退到后台或主动调用 pauseCapture() 时停止，避免反复启停的黑屏与延迟。
     }
 
     /// 手动拍照时调用：暂停扫码识别，但相机继续运行（拍照需要 Session 处于运行状态）。
@@ -409,11 +402,6 @@ class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsD
         } catch {
             return false
         }
-    }
-
-    var isTorchAvailable: Bool {
-        guard let device = device else { return false }
-        return device.hasTorch
     }
 
     // MARK: - 快门声音
