@@ -180,6 +180,13 @@ class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsD
             session.beginConfiguration()
             session.sessionPreset = newPreset
             session.commitConfiguration()
+            // 预设改变后同一台设备支持的码制会变（低分辨率流往往不支持 GS1 DataBar 等），
+            // 必须重算交集，否则会残留无效类型导致整批码制设置失败
+            if let metadata = session.outputs.compactMap({ $0 as? AVCaptureMetadataOutput }).first,
+               let self = self {
+                let supported = metadata.availableMetadataObjectTypes
+                metadata.metadataObjectTypes = self.allSymbologies.filter { supported.contains($0) }
+            }
             self?.scanLock.lock()
             let shouldStart = !(self?.hasScanned ?? true)
             self?.scanLock.unlock()
@@ -311,6 +318,10 @@ class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsD
                 device.setFocusModeLocked(lensPosition: manualFocusPosition, completionHandler: nil)
             } else if device.isFocusModeSupported(.continuousAutoFocus) {
                 device.focusMode = .continuousAutoFocus
+            }
+            // 连续自动曝光：条码黑条与白底反差是解码前提，曝光漂移会直接把条码“糊”掉
+            if device.isExposureModeSupported(.continuousAutoExposure) {
+                device.exposureMode = .continuousAutoExposure
             }
             device.unlockForConfiguration()
         } catch {
@@ -488,6 +499,8 @@ class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsD
         previewLayer = layer
 
         captureSession = session
+        // 初始化对焦/曝光基线：连续自动对焦 + 连续自动曝光，中心区域优先
+        applyFocusMode(on: defaultLens.device)
         addTapToFocus()
 
         DispatchQueue.global(qos: .userInitiated).async {
