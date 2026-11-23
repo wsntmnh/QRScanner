@@ -29,6 +29,11 @@ struct ContentView: View {
     @State private var showPreview = false
     @State private var isSavingPhoto = false
 
+    // 镜头切换：后置档位列表、当前档位、是否前置
+    @State private var lensTitles: [String] = []
+    @State private var selectedLensIndex = 0
+    @State private var isFrontCamera = false
+
     var body: some View {
         ZStack {
             ScannerWrapperView(onScan: { result, symbology in
@@ -37,7 +42,8 @@ struct ContentView: View {
                 handlePhotoCaptured(image: image)
             }, onPhotoCaptureFailed: { message in
                 handlePhotoCaptureFailed(message)
-            }, resetFlag: $resetScanFlag, controller: $scannerController)
+            }, resetFlag: $resetScanFlag, controller: $scannerController,
+               lensTitles: $lensTitles, selectedLensIndex: $selectedLensIndex, isFrontCamera: $isFrontCamera)
             .ignoresSafeArea()
 
             // 上下移动的动态扫描线（不含遮罩与四角框）
@@ -81,6 +87,46 @@ struct ContentView: View {
             // 底部工具栏
             VStack {
                 Spacer()
+
+                // 镜头切换（与系统相机一致）：后置 0.5x / 1x / 3x 档位 + 前后切换
+                if !lensTitles.isEmpty {
+                    HStack(spacing: 10) {
+                        if isFrontCamera {
+                            Text("前置")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundColor(.yellow)
+                                .padding(.horizontal, 14)
+                                .frame(height: 38)
+                                .background(Capsule().fill(Color.black.opacity(0.55)))
+                        } else {
+                            ForEach(Array(lensTitles.enumerated()), id: \.offset) { index, title in
+                                Button {
+                                    scannerController?.selectRearLens(index: index)
+                                } label: {
+                                    Text(title)
+                                        .font(.system(size: 12, weight: .semibold))
+                                        .foregroundColor(selectedLensIndex == index ? .yellow : .white)
+                                        .frame(width: 38, height: 38)
+                                        .background(
+                                            Circle().fill(Color.black.opacity(selectedLensIndex == index ? 0.6 : 0.3))
+                                        )
+                                }
+                            }
+                        }
+
+                        Button {
+                            scannerController?.flipCamera()
+                        } label: {
+                            Image(systemName: "arrow.triangle.2.circlepath.camera.fill")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundColor(.white)
+                                .frame(width: 38, height: 38)
+                                .background(Circle().fill(Color.black.opacity(0.3)))
+                        }
+                    }
+                    .padding(.bottom, 14)
+                }
+
                 // 「历史」已移到设置页，底部只保留相册 / 拍照 / 手电筒三个高频操作
                 HStack(spacing: 44) {
                     Button(action: {
@@ -122,11 +168,12 @@ struct ContentView: View {
                             Text(isTorchOn ? "关闭" : "手电筒")
                                 .font(.system(size: 12, weight: .medium))
                         }
-                        .foregroundColor(isTorchOn ? .yellow : .white)
+                        .foregroundColor(isFrontCamera ? .white.opacity(0.55) : (isTorchOn ? .yellow : .white))
                         .frame(width: 60, height: 60)
                         .background(Color.black.opacity(0.5))
                         .clipShape(Circle())
                     }
+                    .disabled(isFrontCamera)
 
                 }
                 .padding(.bottom, 50)
@@ -921,12 +968,21 @@ struct ScannerWrapperView: UIViewControllerRepresentable {
     var onPhotoCaptureFailed: ((String) -> Void)?
     @Binding var resetFlag: Bool
     @Binding var controller: QRScannerViewController?
+    /// 镜头列表（0.5x / 1x / 3x…）、当前选中档位、是否前置
+    @Binding var lensTitles: [String]
+    @Binding var selectedLensIndex: Int
+    @Binding var isFrontCamera: Bool
 
     func makeUIViewController(context: Context) -> QRScannerViewController {
         let vc = QRScannerViewController()
         vc.onScan = onScan
         vc.onPhotoCaptured = onPhotoCaptured
         vc.onPhotoCaptureFailed = onPhotoCaptureFailed
+        vc.onLensesChanged = { titles, index, front in
+            lensTitles = titles
+            selectedLensIndex = index
+            isFrontCamera = front
+        }
         DispatchQueue.main.async {
             controller = vc
         }
