@@ -24,6 +24,20 @@ class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsD
     private var device: AVCaptureDevice?
     private var pendingWatermarkContent: String?
 
+    // MARK: - 镜头切换相关
+    /// 当前生效的相机输入（切换镜头时用于移除旧输入）
+    private var currentVideoInput: AVCaptureDeviceInput?
+    /// 后置镜头组：标题（0.5x/1x/3x…）、设备、相对广角的倍率，按倍率升序
+    private var rearLenses: [(title: String, device: AVCaptureDevice, zoom: CGFloat)] = []
+    /// 前置镜头（多数机型没有闪光灯、也不支持部分码制）
+    private var frontLens: AVCaptureDevice?
+    private var currentRearIndex = 0
+    private var isFrontCamera = false
+    /// 镜头列表/选中项/是否前置发生变化时回调给 SwiftUI
+    var onLensesChanged: (([String], Int, Bool) -> Void)?
+    /// 串行化会话重配置，避免多次快速切换互相打断
+    private let sessionQueue = DispatchQueue(label: "com.shidongliang.qrscanner.session", qos: .userInitiated)
+
     private let allSymbologies: [AVMetadataObject.ObjectType] = {
         var types: [AVMetadataObject.ObjectType] = [
             .qr, .aztec, .pdf417, .dataMatrix,
@@ -159,6 +173,95 @@ class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsD
         }
     }
 
+    // MARK: - 镜头切换（后置多档 / 前后）
+    /// 选择某个后置档位（0.5x / 1x / 2x / 3x）
+    func selectRearLens(index: Int) {
+        guard index >= 0, index < rearLenses.count else { return }
+        let target = rearLenses[index].device
+        currentRearIndex = index
+        if isFrontCamera || target != device {
+            switchCamera(to: target, front: false)
+        } else {
+            // 已经在该档位，只需同步 UI 选中态
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                self.onLensesChanged?(self.rearLenses.map { $0.title }, index, false)
+            }
+        }
+    }
+
+    /// 前后摄像头切换
+    func flipCamera() {
+        if isFrontCamera {
+            guard currentRearIndex < rearLenses.count else { return }
+            switchCamera(to: rearLenses[currentRearIndex].device, front: false)
+        } else if let front = frontLens {
+            switchCamera(to: front, front: true)
+        }
+    }
+
+    /// 重建相机输入：移除旧 input → 添加新 input → 重新求可用码制交集
+    private func switchCamera(to newDevice: AVCaptureDevice, front: Bool) {
+        sessionQueue.async { [weak self] in
+            guard let self = self, let session = self.captureSession else { return }
+            let previousDevice = self.device
+
+            session.beginConfiguration()
+            if let oldInput = self.currentVideoInput {
+                session.removeInput(oldInput)
+                self.currentVideoInput = nil
+            }
+
+            var applied = false
+            do {
+                let input = try AVCaptureDeviceInput(device: newDevice)
+                if session.canAddInput(input) {
+                    session.addInput(input)
+                    self.currentVideoInput = input
+                    applied = true
+                }
+            } catch {
+                print("切换镜头失败: \(error.localizedDescription)")
+            }
+
+            // 新镜头加不进去时回滚到原设备，避免出现黑屏
+            if !applied, let previous = previousDevice,
+               let fallback = try? AVCaptureDeviceInput(device: previous),
+               session.canAddInput(fallback) {
+                session.addInput(fallback)
+                self.currentVideoInput = fallback
+            }
+
+            // 换设备后支持的码制可能变化（前置常缺一维码），重新求交集
+            if let metadata = session.outputs.compactMap({ $0 as? AVCaptureMetadataOutput }).first {
+                let supported = metadata.availableMetadataObjectTypes
+                metadata.metadataObjectTypes = self.allSymbologies.filter { supported.contains($0) }
+            }
+            session.commitConfiguration()
+
+            if applied {
+                self.device = newDevice
+                self.isFrontCamera = front
+                self.scanLock.lock()
+                self.hasScanned = false
+                self.scanLock.unlock()
+            }
+
+            DispatchQueue.main.async {
+                // 前置预览按镜像显示，和系统相机一致
+                self.previewLayer?.connection?.automaticallyAdjustsVideoMirroring = false
+                self.previewLayer?.connection?.isVideoMirrored = front
+                if front {
+                    // 前置没有闪光灯/手电筒，强制同步关闭状态
+                    NotificationCenter.default.post(
+                        name: Self.torchStateDidChangeNotification, object: nil, userInfo: ["isOn": false]
+                    )
+                }
+                self.onLensesChanged?(self.rearLenses.map { $0.title }, self.currentRearIndex, self.isFrontCamera)
+            }
+        }
+    }
+
     // MARK: - 手电筒控制
     @discardableResult
     func setTorch(on: Bool) -> Bool {
@@ -208,21 +311,31 @@ class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsD
     // MARK: - 相机设置
     private func setupCamera() {
         let session = AVCaptureSession()
-        session.sessionPreset = SettingsManager.shared.photoQuality.sessionPreset
+        // 能力判断：并非所有设备都支持 .photo 预设，直接赋值会抛异常
+        let preset = SettingsManager.shared.photoQuality.sessionPreset
+        if session.canSetSessionPreset(preset) {
+            session.sessionPreset = preset
+        }
 
-        guard let videoDevice = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) else {
+        // 后置镜头组：按设备真实拥有的镜头动态生成 0.5x / 1x / 2x / 3x
+        let rear = discoverRearLenses()
+        guard let defaultLens = rear.first(where: { abs($0.zoom - 1) < 0.01 }) ?? rear.first else {
             showError("无法访问后置摄像头")
             return
         }
-        self.device = videoDevice
+        self.rearLenses = rear
+        self.currentRearIndex = rear.firstIndex(where: { $0.device == defaultLens.device }) ?? 0
+        self.device = defaultLens.device
+        self.frontLens = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front)
 
         do {
-            let input = try AVCaptureDeviceInput(device: videoDevice)
+            let input = try AVCaptureDeviceInput(device: defaultLens.device)
             guard session.canAddInput(input) else {
                 showError("无法添加相机输入")
                 return
             }
             session.addInput(input)
+            self.currentVideoInput = input
         } catch {
             showError("相机初始化失败: \(error.localizedDescription)")
             return
@@ -262,6 +375,48 @@ class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsD
         DispatchQueue.global(qos: .userInitiated).async {
             session.startRunning()
         }
+
+        // 告诉 UI：当前设备支持哪些档位
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.onLensesChanged?(self.rearLenses.map { $0.title }, self.currentRearIndex, false)
+        }
+    }
+
+    /// 枚举后置摄像头，用「相对广角的视野比」换算成 0.5x / 1x / 2x / 3x 档位。
+    /// 这样不依赖机型硬编码，iPhone 13/15/16 各代超广角、长焦倍率都能得到正确标签。
+    private func discoverRearLenses() -> [(title: String, device: AVCaptureDevice, zoom: CGFloat)] {
+        let discovery = AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.builtInUltraWideCamera, .builtInWideAngleCamera, .builtInTelephotoCamera],
+            mediaType: .video,
+            position: .back
+        )
+        let devices = discovery.devices
+        guard let wide = devices.first(where: { $0.deviceType == .builtInWideAngleCamera }) else {
+            // 兜底：老设备只有广角一颗
+            if let single = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) {
+                return [("1x", single, 1.0)]
+            }
+            return []
+        }
+
+        let wideFOV = Double(wide.activeFormat.videoFieldOfView)
+        var result: [(title: String, device: AVCaptureDevice, zoom: CGFloat)] = []
+        for device in devices {
+            let fov = Double(max(device.activeFormat.videoFieldOfView, 1))
+            let rawZoom = wideFOV / fov
+            let rounded = max(0.5, (rawZoom * 2).rounded() / 2)
+            let title: String
+            if abs(rounded - 1) < 0.01 {
+                title = "1x"
+            } else if rounded < 1 {
+                title = String(format: "%.1fx", rounded)
+            } else {
+                title = String(format: "%.0fx", rounded)
+            }
+            result.append((title, device, CGFloat(rounded)))
+        }
+        return result.sorted { $0.zoom < $1.zoom }
     }
 
     // MARK: - 扫码回调
@@ -305,7 +460,10 @@ class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsD
         self.pendingWatermarkContent = watermarkContent
 
         let settings = AVCapturePhotoSettings()
-        settings.flashMode = .auto
+        // 无闪光灯的机型/前置镜头直接赋 .auto 会抛异常，必须先判断能力
+        if photoOutput.supportedFlashModes.contains(.auto) {
+            settings.flashMode = .auto
+        }
         photoOutput.capturePhoto(with: settings, delegate: self)
     }
 
