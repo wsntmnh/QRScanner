@@ -37,6 +37,9 @@ struct ContentView: View {
     @State private var manualFocus = false
     @State private var focusPosition: Double = 0.5
 
+    // 微距：占用超广角 + 焦距锁最近
+    @State private var isMacro = false
+
     var body: some View {
         ZStack {
             ScannerWrapperView(onScan: { result, symbology in
@@ -46,7 +49,8 @@ struct ContentView: View {
             }, onPhotoCaptureFailed: { message in
                 handlePhotoCaptureFailed(message)
             }, resetFlag: $resetScanFlag, controller: $scannerController,
-               lensTitles: $lensTitles, selectedLensIndex: $selectedLensIndex)
+               lensTitles: $lensTitles, selectedLensIndex: $selectedLensIndex,
+               isMacroOn: $isMacro, manualFocusOn: $manualFocus, focusPosition: $focusPosition)
             .ignoresSafeArea()
 
             // 上下移动的动态扫描线（不含遮罩与四角框）
@@ -156,6 +160,28 @@ struct ContentView: View {
                                         Circle().fill(Color.black.opacity(selectedLensIndex == index ? 0.6 : 0.3))
                                     )
                             }
+                        }
+
+                        // 微距：切超广角 + 焦距锁最近（离得很近的码用这个）
+                        Button {
+                            if isMacro {
+                                isMacro = false
+                                scannerController?.setMacroMode(enabled: false)
+                            } else {
+                                guard let controller = scannerController, controller.hasMacroLens else {
+                                    showError(message: "该设备没有超广角镜头，不支持微距")
+                                    return
+                                }
+                                isMacro = true
+                                controller.setMacroMode(enabled: true)
+                            }
+                        } label: {
+                            Text("微距")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundColor(isMacro ? .yellow : .white)
+                                .padding(.horizontal, 12)
+                                .frame(height: 38)
+                                .background(Capsule().fill(Color.black.opacity(isMacro ? 0.6 : 0.3)))
                         }
                     }
                     .padding(.bottom, 14)
@@ -1004,6 +1030,10 @@ struct ScannerWrapperView: UIViewControllerRepresentable {
     /// 镜头列表（0.5x / 1x / 3x…）、当前选中档位
     @Binding var lensTitles: [String]
     @Binding var selectedLensIndex: Int
+    /// 微距开关 / 对焦方式 / 手动焦距（微距会改动这三项，由控制器同步回来）
+    @Binding var isMacroOn: Bool
+    @Binding var manualFocusOn: Bool
+    @Binding var focusPosition: Double
 
     func makeUIViewController(context: Context) -> QRScannerViewController {
         let vc = QRScannerViewController()
@@ -1013,6 +1043,11 @@ struct ScannerWrapperView: UIViewControllerRepresentable {
         vc.onLensesChanged = { titles, index in
             lensTitles = titles
             selectedLensIndex = index
+        }
+        vc.onMacroStateChanged = { macro, manual, pos in
+            isMacroOn = macro
+            manualFocusOn = manual
+            focusPosition = Double(pos)
         }
         DispatchQueue.main.async {
             controller = vc
