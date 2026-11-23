@@ -47,6 +47,20 @@ class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsD
         device?.isLockingFocusWithCustomLensPositionSupported ?? false
     }
 
+    // MARK: - 微距
+    /// 是否处于微距模式（占用超广角，焦距锁到最近，放大到接近 1x 视野）
+    private var isMacroMode = false
+    private var macroReturnIndex = 0
+    private var macroReturnManualFocus = false
+    private var macroReturnFocusPosition: Float = 0.5
+    /// 微距状态变化：(是否微距, 是否手动对焦, 手动焦距)
+    var onMacroStateChanged: ((Bool, Bool, Float) -> Void)?
+
+    /// 是否有超广角可以拍微距（超广角最近对焦距离约 2cm，主摄一般 10–15cm）
+    var hasMacroLens: Bool {
+        rearLenses.contains { $0.zoom < 0.9 }
+    }
+
     private let allSymbologies: [AVMetadataObject.ObjectType] = {
         var types: [AVMetadataObject.ObjectType] = [
             .qr, .aztec, .pdf417, .dataMatrix,
@@ -187,6 +201,13 @@ class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsD
     func selectRearLens(index: Int) {
         guard index >= 0, index < rearLenses.count else { return }
         let target = rearLenses[index].device
+        // 手动选档位视为退出微距（微距会占用超广角并放大）
+        if isMacroMode {
+            isMacroMode = false
+            DispatchQueue.main.async { [weak self] in
+                self?.onMacroStateChanged?(false, self?.isManualFocus ?? false, self?.manualFocusPosition ?? 0.5)
+            }
+        }
         currentRearIndex = index
         if target != device {
             switchCamera(to: target)
@@ -200,7 +221,8 @@ class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsD
     }
 
     /// 重建相机输入：移除旧 input → 添加新 input → 重新求可用码制交集
-    private func switchCamera(to newDevice: AVCaptureDevice) {
+    /// completion 在会话配置完成后回调，参数为真正生效的设备（失败时可能是回滚的原设备）
+    private func switchCamera(to newDevice: AVCaptureDevice, completion: ((AVCaptureDevice) -> Void)? = nil) {
         sessionQueue.async { [weak self] in
             guard let self = self, let session = self.captureSession else { return }
             let previousDevice = self.device
@@ -243,6 +265,8 @@ class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsD
                 self.scanLock.lock()
                 self.hasScanned = false
                 self.scanLock.unlock()
+                // 换镜头后统一回到 1x 变焦，避免上一颗镜头的放大倍数残留
+                self.applyZoom(1.0, on: newDevice)
                 // 换了镜头后沿用当前对焦方式（手动焦距保持不变）
                 self.applyFocusMode(on: newDevice)
             }
@@ -250,6 +274,7 @@ class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsD
             DispatchQueue.main.async {
                 self.onLensesChanged?(self.rearLenses.map { $0.title }, self.currentRearIndex)
             }
+            completion?(self.device ?? newDevice)
         }
     }
 
@@ -298,6 +323,74 @@ class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsD
         } catch {
             print("设置对焦模式失败: \(error.localizedDescription)")
         }
+    }
+
+    // MARK: - 微距控制
+    /// 开启：切超广角 + 焦距锁最近 + 放大到接近 1x 视野
+    /// 关闭：切回原镜头 + 变焦复位 + 恢复原来的对焦方式
+    func setMacroMode(enabled: Bool) {
+        guard enabled != isMacroMode else { return }
+
+        if enabled {
+            guard let index = rearLenses.firstIndex(where: { $0.zoom < 0.9 }) else {
+                // 没有超广角的机型（单摄/双摄无超广角）
+                DispatchQueue.main.async { [weak self] in
+                    self?.onMacroStateChanged?(false, self?.isManualFocus ?? false, self?.manualFocusPosition ?? 0.5)
+                }
+                return
+            }
+            let macro = rearLenses[index]
+            macroReturnIndex = currentRearIndex
+            macroReturnManualFocus = isManualFocus
+            macroReturnFocusPosition = manualFocusPosition
+            currentRearIndex = index
+            isMacroMode = true
+            // 焦距锁到最近段（超广角的最近对焦距离约 2cm）
+            manualFocusPosition = 0
+            isManualFocus = true
+            // 放大到接近 1x 视野：系统相机微距也是超广角裁切取景
+            let zoom = 1.0 / max(macro.zoom, 0.1)
+            switchCamera(to: macro.device) { [weak self] applied in
+                guard let self = self else { return }
+                self.applyZoom(zoom, on: applied)
+                self.applyFocusMode(on: applied)
+                DispatchQueue.main.async {
+                    self.onMacroStateChanged?(true, true, 0)
+                }
+            }
+        } else {
+            isMacroMode = false
+            guard macroReturnIndex >= 0, macroReturnIndex < rearLenses.count else { return }
+            let target = rearLenses[macroReturnIndex]
+            currentRearIndex = macroReturnIndex
+            manualFocusPosition = macroReturnFocusPosition
+            isManualFocus = macroReturnManualFocus
+            switchCamera(to: target.device) { [weak self] applied in
+                guard let self = self else { return }
+                self.resetZoom(on: applied)
+                self.applyFocusMode(on: applied)
+                DispatchQueue.main.async {
+                    self.onMacroStateChanged?(false, self.isManualFocus, self.manualFocusPosition)
+                }
+            }
+        }
+    }
+
+    /// 设置数码变焦（单次应用，不做动画；超广角放大 2x 即接近 1x 视野）
+    private func applyZoom(_ factor: CGFloat, on device: AVCaptureDevice) {
+        do {
+            try device.lockForConfiguration()
+            let maxZoom = min(device.activeFormat.videoMaxZoomFactor, 8)
+            let minZoom = device.minAvailableVideoZoomFactor
+            device.videoZoomFactor = min(max(factor, minZoom), maxZoom)
+            device.unlockForConfiguration()
+        } catch {
+            print("设置变焦失败: \(error.localizedDescription)")
+        }
+    }
+
+    private func resetZoom(on device: AVCaptureDevice) {
+        applyZoom(1.0, on: device)
     }
 
     // MARK: - 手电筒控制
