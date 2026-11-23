@@ -277,10 +277,3 @@ struct BarChartView: View {
         }
     }
 }
-
-// MARK: - 预览
-struct StatisticsView_Previews: PreviewProvider {
-    static var previews: some View {
-        StatisticsView()
-    }
-}
