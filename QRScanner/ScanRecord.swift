@@ -39,12 +39,6 @@ struct ScanRecord: Identifiable, Codable, Equatable {
         return formatter.string(from: timestamp)
     }
     
-    var shortTime: String {
-        let formatter = ScanRecord.sharedFormatter
-        formatter.dateFormat = "MM-dd HH:mm"
-        return formatter.string(from: timestamp)
-    }
-    
     // 判断是二维码还是条形码
     var isBarcode: Bool {
         let barcodes = [
