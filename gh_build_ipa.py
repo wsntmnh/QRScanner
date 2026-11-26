@@ -127,6 +127,10 @@ def main():
             sys.exit(f"❌ 上传 {rel} 失败 {code}: {resp}")
         print(f"   [{i}/{len(files)}] {rel}")
 
+    # 记录触发前的运行 id，避免轮询抓到上一次已完成的运行（会下载到旧包）
+    _, prev = call("GET", f"/repos/{owner}/{repo}/actions/runs?per_page=20", tok)
+    old_run_ids = {r["id"] for r in (prev.get("workflow_runs") or [])} if isinstance(prev, dict) else set()
+
     # 3) 触发 Actions
     code, resp = call("POST", f"/repos/{owner}/{repo}/actions/workflows/build-ipa.yml/dispatches",
                       tok, {"ref": args.branch})
@@ -143,6 +147,8 @@ def main():
         if code != 200:
             sys.exit(f"❌ 查询运行失败 {code}: {runs}")
         for r in runs.get("workflow_runs", []):
+            if r["id"] in old_run_ids:
+                continue
             if r.get("name") == "Build unsigned IPA" or "build-ipa" in (r.get("path") or ""):
                 run_id, status, conclusion = r["id"], r["status"], r["conclusion"]
                 break
