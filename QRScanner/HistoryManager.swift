@@ -22,8 +22,8 @@ class HistoryManager: ObservableObject {
         loadRecords()
     }
 
-    func addRecord(content: String, source: ScanRecord.ScanSource, symbology: String = "未知") {
-        let record = ScanRecord(content: content, source: source, symbology: symbology)
+    func addRecord(content: String, source: ScanRecord.ScanSource, symbology: String = "未知", direction: ScanRecord.VINDirection? = nil) {
+        let record = ScanRecord(content: content, source: source, symbology: symbology, direction: direction)
         records.insert(record, at: 0)
         if records.count > maxRecords {
             records = Array(records.prefix(maxRecords))
