@@ -8,8 +8,9 @@
 import UIKit
 import AVFoundation
 import AudioToolbox
+import Vision
 
-class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsDelegate, AVCapturePhotoCaptureDelegate {
+class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsDelegate, AVCapturePhotoCaptureDelegate, AVCaptureVideoDataOutputSampleBufferDelegate {
     static let torchStateDidChangeNotification = Notification.Name("QRScannerViewController.torchStateDidChange")
     var onScan: ((String, String) -> Void)?
     var onPhotoCaptured: ((UIImage) -> Void)?
@@ -22,6 +23,14 @@ class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsD
     private let scanCooldown: TimeInterval = 1.5
     private var device: AVCaptureDevice?
     private var pendingWatermarkContent: String?
+
+    // MARK: - Vision 条形码兜底识别
+    /// 条形码（尤其细窄、弯曲、反光的一维码）用系统元数据输出经常读不出，
+    /// 这里额外挂一路视频帧，用 Vision 在帧上找码，作为第二道识别通道
+    private var videoDataOutput: AVCaptureVideoDataOutput?
+    private let frameQueue = DispatchQueue(label: "com.shidongliang.qrscanner.frames", qos: .userInitiated)
+    private var lastVisionDate = Date.distantPast
+    private let visionInterval: TimeInterval = 0.35
 
     // MARK: - 镜头切换相关
     /// 当前生效的相机输入（切换镜头时用于移除旧输入）
@@ -500,6 +509,23 @@ class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsD
             let supported = metadataOutput.availableMetadataObjectTypes
             metadataOutput.metadataObjectTypes = self.allSymbologies.filter { supported.contains($0) }
 
+            // 视频帧输出：给 Vision 兜底识别用（一维码识别率明显高于纯元数据输出）
+            let videoDataOutput = AVCaptureVideoDataOutput()
+            videoDataOutput.alwaysDiscardsLateVideoFrames = true
+            videoDataOutput.videoSettings = [
+                kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_420YpCbCr8BiPlanarFullRange)
+            ]
+            if session.canAddOutput(videoDataOutput) {
+                session.addOutput(videoDataOutput)
+                videoDataOutput.setSampleBufferDelegate(self, queue: self.frameQueue)
+                // 竖屏取景：把帧旋转到正向，否则 Vision 会在横向坐标系里找码
+                if let connection = videoDataOutput.connection(with: .video),
+                   connection.isVideoRotationAngleSupported(90) {
+                    connection.videoRotationAngle = 90
+                }
+                self.videoDataOutput = videoDataOutput
+            }
+
             let photoOutput = AVCapturePhotoOutput()
             guard session.canAddOutput(photoOutput) else {
                 self.showError("无法添加照片输出")
@@ -567,6 +593,95 @@ class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsD
             result.append((title, device, CGFloat(rounded)))
         }
         return result.sorted { $0.zoom < $1.zoom }
+    }
+
+    // MARK: - 视频帧回调：Vision 兜底识别（一维码优先）
+    func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+        guard output === videoDataOutput else { return }
+
+        // 正在处理一次识别、或还在冷却期，就跳过这一帧
+        scanLock.lock()
+        let busy = hasScanned
+        let cooling = lastScanTime.map { Date().timeIntervalSince($0) < scanCooldown } ?? false
+        scanLock.unlock()
+        if busy || cooling { return }
+
+        let now = Date()
+        if now.timeIntervalSince(lastVisionDate) < visionInterval { return }
+        lastVisionDate = now
+
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+
+        let request = VNDetectBarcodesRequest()
+        // 只看取景框中间区域：更快，也避免把远处背景里的码误识别
+        request.regionOfInterest = CGRect(x: 0.04, y: 0.22, width: 0.92, height: 0.56)
+        let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up, options: [:])
+        do {
+            try handler.perform([request])
+        } catch {
+            return
+        }
+
+        guard let observations = request.results, !observations.isEmpty else { return }
+
+        // 一维码优先，其次取置信度最高、码面面积最大的
+        let candidates = observations.compactMap { obs -> (VNBarcodeObservation, String)? in
+            guard let value = obs.payloadStringValue, !value.isEmpty else { return nil }
+            if obs.confidence < 0.3 { return nil }
+            return (obs, value)
+        }
+        guard let best = candidates.sorted(by: { a, b in
+            let a1D = self.isOneDimensional(a.0.symbology)
+            let b1D = self.isOneDimensional(b.0.symbology)
+            if a1D != b1D { return a1D }
+            return a.0.boundingBox.width * a.0.boundingBox.height > b.0.boundingBox.width * b.0.boundingBox.height
+        }).first else { return }
+
+        scanLock.lock()
+        if hasScanned {
+            scanLock.unlock()
+            return
+        }
+        hasScanned = true
+        lastScanTime = Date()
+        scanLock.unlock()
+
+        let name = self.visionSymbologyName(best.0.symbology)
+        DispatchQueue.main.async { [weak self] in
+            self?.onScan?(best.1, name)
+        }
+    }
+
+    /// 是否为一维（条形）码
+    private func isOneDimensional(_ symbology: VNBarcodeSymbology) -> Bool {
+        let raw = symbology.rawValue
+        // 二维码的 Vision 标识里带这些关键字，其余按一维码处理
+        let twoD = ["QR", "DataMatrix", "PDF417", "Aztec", "MicroQR", "MicroPDF"]
+        return !twoD.contains { raw.contains($0) }
+    }
+
+    /// Vision 码制名映射成中文/常见叫法，和元数据通道的名称保持一致
+    private func visionSymbologyName(_ symbology: VNBarcodeSymbology) -> String {
+        let raw = symbology.rawValue.replacingOccurrences(of: "VNBarcodeSymbology", with: "")
+        switch raw {
+        case "Code128": return "Code 128"
+        case "Code39", "Code39Checksum", "Code39FullASCII", "Code39FullASCIIChecksum": return "Code 39"
+        case "Code93", "Code93i": return "Code 93"
+        case "Codabar": return "Codabar"
+        case "EAN8": return "EAN-8"
+        case "EAN13": return "EAN-13"
+        case "UPCE": return "UPC-E"
+        case "ITF14": return "ITF-14"
+        case "I2of5", "I2of5Checksum": return "Interleaved 2 of 5"
+        case "GS1DataBar": return "GS1 DataBar"
+        case "GS1DataBarExpanded": return "GS1 DataBar Expanded"
+        case "GS1DataBarLimited": return "GS1 DataBar Limited"
+        case "QR": return "QR Code"
+        case "DataMatrix": return "Data Matrix"
+        case "PDF417", "MicroPDF417": return "PDF417"
+        case "Aztec": return "Aztec"
+        default: return "条形码"
+        }
     }
 
     // MARK: - 扫码回调
