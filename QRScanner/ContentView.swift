@@ -41,6 +41,11 @@ struct ContentView: View {
     // 启动兜底：相机长时间没起来时给出可操作的提示，而不是停在空白画面
     @State private var showBootFallback = false
 
+    // 车架号出入库：扫到 VIN 后先让用户选择方向，再落库
+    @State private var pendingVIN: String?
+    @State private var pendingVINSymbology = ""
+    @State private var showDirectionPicker = false
+
     var body: some View {
         ZStack {
             ScannerWrapperView(onScan: { result, symbology in
@@ -256,6 +261,62 @@ struct ContentView: View {
                 .transition(.opacity)
             }
 
+            // 车架号出入库选择
+            if showDirectionPicker, let vin = pendingVIN {
+                VStack(spacing: 18) {
+                    VStack(spacing: 6) {
+                        Text("识别到车架号")
+                            .font(.system(size: 13))
+                            .foregroundColor(.white.opacity(0.7))
+                        Text(vin)
+                            .font(.system(size: 17, weight: .semibold, design: .monospaced))
+                            .foregroundColor(.white)
+                    }
+
+                    HStack(spacing: 14) {
+                        Button {
+                            confirmVINDirection(.inbound)
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "arrow.down.to.line")
+                                Text("入库")
+                            }
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundColor(.white)
+                            .frame(width: 130, height: 52)
+                            .background(RoundedRectangle(cornerRadius: 12).fill(Color.green.opacity(0.85)))
+                        }
+
+                        Button {
+                            confirmVINDirection(.outbound)
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "arrow.up.to.line")
+                                Text("出库")
+                            }
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundColor(.white)
+                            .frame(width: 130, height: 52)
+                            .background(RoundedRectangle(cornerRadius: 12).fill(Color.orange.opacity(0.9)))
+                        }
+                    }
+
+                    Button {
+                        confirmVINDirection(nil)
+                    } label: {
+                        Text("跳过，不记录方向")
+                            .font(.system(size: 13))
+                            .foregroundColor(.white.opacity(0.65))
+                    }
+                }
+                .padding(24)
+                .background(RoundedRectangle(cornerRadius: 18).fill(Color.black.opacity(0.85)))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.black.opacity(0.45))
+                .ignoresSafeArea()
+                .transition(.opacity)
+            }
+
             // 启动兜底：相机没起来时给出明确原因与「重新初始化」按钮
             if showBootFallback {
                 VStack(spacing: 16) {
@@ -355,11 +416,32 @@ struct ContentView: View {
 
     // MARK: - 扫描结果处理
     private func handleScanResult(result: String, symbology: String, source: ScanRecord.ScanSource = .camera) {
+        // 车架号（17 位完整 VIN）需要先选入库/出库，选完再记录
+        if source == .camera, let vin = ScanRecord.vinString(from: result) {
+            pendingVIN = vin
+            pendingVINSymbology = symbology
+            lastScanSource = source
+            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+            withAnimation { showDirectionPicker = true }
+            return
+        }
+        finishScan(result: result, symbology: symbology, source: source, direction: nil)
+    }
+
+    /// 选定出入库方向后继续走原来的记录/复制/拍照流程
+    private func confirmVINDirection(_ direction: ScanRecord.VINDirection?) {
+        guard let vin = pendingVIN else { return }
+        withAnimation { showDirectionPicker = false }
+        pendingVIN = nil
+        finishScan(result: vin, symbology: pendingVINSymbology, source: .camera, direction: direction)
+    }
+
+    private func finishScan(result: String, symbology: String, source: ScanRecord.ScanSource, direction: ScanRecord.VINDirection?) {
         lastScanSource = source
         let generator = UINotificationFeedbackGenerator()
         generator.notificationOccurred(.success)
 
-        HistoryManager.shared.addRecord(content: result, source: source, symbology: symbology)
+        HistoryManager.shared.addRecord(content: result, source: source, symbology: symbology, direction: direction)
         UIPasteboard.general.string = result
 
         successMessage = result
