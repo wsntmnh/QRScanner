@@ -322,6 +322,7 @@ struct DataExportView: View {
     @State private var newPrefix = ""
     @State private var newBrand = ""
     @State private var copiedCount = 0
+    @State private var searchText = ""
     @State private var showCopied = false
     @State private var shareURL: URL?
     @State private var showShare = false
@@ -333,6 +334,7 @@ struct DataExportView: View {
     /// 按「时间范围 + 出入库 + 车架号前缀」筛选后的记录（保持最新在前）
     private var exportRecords: [ScanRecord] {
         let bounds = range.interval(selectedDay: selectedDay)
+        let keyword = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return historyManager.records.filter { record in
             if let start = bounds.start, record.timestamp < start { return false }
             if let end = bounds.end, record.timestamp >= end { return false }
@@ -342,6 +344,14 @@ struct DataExportView: View {
             if vinOnly, vinString(of: record.content) == nil { return false }
             if vinPrefixFilter != "全部" {
                 guard let prefix = vinPrefix(of: record.content), prefix == vinPrefixFilter else { return false }
+            }
+            if !keyword.isEmpty {
+                // 搜索：车架号 / 扫码内容 / 品牌名 任一命中即可
+                let brand = vinPrefix(of: record.content).flatMap { brandName(for: $0) } ?? ""
+                let hit = record.content.lowercased().contains(keyword)
+                    || brand.lowercased().contains(keyword)
+                    || record.symbology.lowercased().contains(keyword)
+                if !hit { return false }
             }
             return true
         }
@@ -568,6 +578,29 @@ struct DataExportView: View {
 
     var body: some View {
         List {
+            Section(header: Text("搜索"),
+                    footer: Text(searchText.isEmpty
+                                 ? "可按车架号、扫码内容、品牌名或码制搜索，结果同时作用到预览、条数和导出。"
+                                 : "已按「\(searchText)」筛选，命中 \(exportRecords.count) 条。")) {
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundColor(.secondary)
+                    TextField("搜索车架号 / 内容 / 品牌", text: $searchText)
+                        .textInputAutocapitalization(.characters)
+                        .autocorrectionDisabled(true)
+                        .submitLabel(.search)
+                    if !searchText.isEmpty {
+                        Button {
+                            searchText = ""
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundColor(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+
             Section(header: Text("时间范围"),
                     footer: Text(range == .day ? "只导出所选那一天（00:00 至次日 00:00）的记录。" : "按时间范围筛选要导出的记录。")) {
                 Picker("选择时间", selection: $range) {
