@@ -237,7 +237,7 @@ struct ContentView: View {
                         .font(.system(size: 17, weight: .medium))
                         .foregroundColor(.white)
 
-                    if (settings.autoSavePhoto || settings.autoCaptureEnabled) && lastScanSource == .camera {
+                    if settings.autoSavePhoto && lastScanSource == .camera {
                         Text("正在生成预览...")
                             .font(.system(size: 13))
                             .foregroundColor(.white.opacity(0.8))
@@ -378,8 +378,7 @@ struct ContentView: View {
             return
         }
 
-        // 关闭了「扫描后拍照预览」时，只有开了「自动拍照」才会自动拍
-        if settings.autoSavePhoto || settings.autoCaptureEnabled {
+        if settings.autoSavePhoto {
             withAnimation {
                 showSuccess = true
             }
@@ -746,21 +745,6 @@ struct SettingsView: View {
                                 Text("扫描后拍照预览")
                                     .font(.system(size: 16))
                                 Text("识别成功后拍照并预览，手动保存")
-                                    .font(.system(size: 12))
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                    }
-
-                    Toggle(isOn: $settings.autoCaptureEnabled) {
-                        HStack(spacing: 12) {
-                            Image(systemName: "aperture")
-                                .foregroundColor(.green)
-                                .frame(width: 28)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("自动拍照")
-                                    .font(.system(size: 16))
-                                Text("扫到码后立即自动拍一张（不用再按拍照按钮）")
                                     .font(.system(size: 12))
                                     .foregroundColor(.secondary)
                             }
