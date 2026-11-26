@@ -92,6 +92,7 @@ class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsD
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        view.backgroundColor = .black
         checkPermission()
 
         NotificationCenter.default.addObserver(
@@ -193,6 +194,20 @@ class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsD
             if shouldStart {
                 session.startRunning()
             }
+        }
+    }
+
+    // MARK: - 重新初始化（启动失败兜底）
+    func restartCamera() {
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
+            if captureSession == nil {
+                setupCamera()
+            } else if let session = captureSession, !session.isRunning {
+                DispatchQueue.global(qos: .userInitiated).async { session.startRunning() }
+            }
+        default:
+            checkPermission()
         }
     }
 
@@ -439,78 +454,82 @@ class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsD
     }
 
     // MARK: - 相机设置
+    /// 相机配置全部放到 sessionQueue 上做：设备枚举、输入输出装配、startRunning 都可能耗时，
+    /// 放在主线程会让启动画面卡住（表现就是一直白屏）。主线程只负责建预览层和回调 UI。
     private func setupCamera() {
-        let session = AVCaptureSession()
-        // 能力判断：并非所有设备都支持 .photo 预设，直接赋值会抛异常
-        let preset = SettingsManager.shared.photoQuality.sessionPreset
-        if session.canSetSessionPreset(preset) {
-            session.sessionPreset = preset
-        }
+        sessionQueue.async { [weak self] in
+            guard let self = self else { return }
 
-        // 后置镜头组：按设备真实拥有的镜头动态生成 0.5x / 1x / 2x / 3x
-        let rear = discoverRearLenses()
-        guard let defaultLens = rear.first(where: { abs($0.zoom - 1) < 0.01 }) ?? rear.first else {
-            showError("无法访问后置摄像头")
-            return
-        }
-        self.rearLenses = rear
-        self.currentRearIndex = rear.firstIndex(where: { $0.device == defaultLens.device }) ?? 0
-        self.device = defaultLens.device
+            let session = AVCaptureSession()
+            // 能力判断：并非所有设备都支持 .photo 预设，直接赋值会抛异常
+            let preset = SettingsManager.shared.photoQuality.sessionPreset
+            if session.canSetSessionPreset(preset) {
+                session.sessionPreset = preset
+            }
 
-        do {
-            let input = try AVCaptureDeviceInput(device: defaultLens.device)
-            guard session.canAddInput(input) else {
-                showError("无法添加相机输入")
+            // 后置镜头组：按设备真实拥有的镜头动态生成 0.5x / 1x / 2x / 3x
+            let rear = self.discoverRearLenses()
+            guard let defaultLens = rear.first(where: { abs($0.zoom - 1) < 0.01 }) ?? rear.first else {
+                self.showError("无法访问后置摄像头")
                 return
             }
-            session.addInput(input)
-            self.currentVideoInput = input
-        } catch {
-            showError("相机初始化失败: \(error.localizedDescription)")
-            return
-        }
+            self.rearLenses = rear
 
-        let metadataOutput = AVCaptureMetadataOutput()
-        guard session.canAddOutput(metadataOutput) else {
-            showError("无法添加扫码输出")
-            return
-        }
-        session.addOutput(metadataOutput)
-        metadataOutput.setMetadataObjectsDelegate(self, queue: videoQueue)
-        // 关键修复：只启用当前设备 + 当前分辨率预设下真正支持的码制。
-        // 旧设备或低清晰度预设下不支持 interleaved2of5 / itf14 等类型，
-        // 直接整体赋值会导致一维码识别能力静默失效。
-        let supported = metadataOutput.availableMetadataObjectTypes
-        let enabledTypes = allSymbologies.filter { supported.contains($0) }
-        metadataOutput.metadataObjectTypes = enabledTypes
+            do {
+                let input = try AVCaptureDeviceInput(device: defaultLens.device)
+                guard session.canAddInput(input) else {
+                    self.showError("无法添加相机输入")
+                    return
+                }
+                session.addInput(input)
+                self.currentVideoInput = input
+            } catch {
+                self.showError("相机初始化失败: \(error.localizedDescription)")
+                return
+            }
 
-        let photoOutput = AVCapturePhotoOutput()
-        guard session.canAddOutput(photoOutput) else {
-            showError("无法添加照片输出")
-            return
-        }
-        session.addOutput(photoOutput)
-        self.photoOutput = photoOutput
+            let metadataOutput = AVCaptureMetadataOutput()
+            guard session.canAddOutput(metadataOutput) else {
+                self.showError("无法添加扫码输出")
+                return
+            }
+            session.addOutput(metadataOutput)
+            metadataOutput.setMetadataObjectsDelegate(self, queue: self.videoQueue)
+            // 只启用当前设备 + 当前分辨率预设下真正支持的码制，
+            // 直接整体赋值会导致一维码识别能力静默失效
+            let supported = metadataOutput.availableMetadataObjectTypes
+            metadataOutput.metadataObjectTypes = self.allSymbologies.filter { supported.contains($0) }
 
-        let layer = AVCaptureVideoPreviewLayer(session: session)
-        layer.videoGravity = .resizeAspectFill
-        layer.frame = view.bounds
-        view.layer.insertSublayer(layer, at: 0)
-        previewLayer = layer
+            let photoOutput = AVCapturePhotoOutput()
+            guard session.canAddOutput(photoOutput) else {
+                self.showError("无法添加照片输出")
+                return
+            }
+            session.addOutput(photoOutput)
+            self.photoOutput = photoOutput
 
-        captureSession = session
-        // 初始化对焦/曝光基线：连续自动对焦 + 连续自动曝光，中心区域优先
-        applyFocusMode(on: defaultLens.device)
-        addTapToFocus()
+            self.device = defaultLens.device
+            self.currentRearIndex = rear.firstIndex(where: { $0.device == defaultLens.device }) ?? 0
+            self.captureSession = session
 
-        DispatchQueue.global(qos: .userInitiated).async {
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                let layer = AVCaptureVideoPreviewLayer(session: session)
+                layer.videoGravity = .resizeAspectFill
+                layer.frame = self.view.bounds
+                layer.backgroundColor = UIColor.black.cgColor
+                self.view.layer.insertSublayer(layer, at: 0)
+                self.previewLayer = layer
+
+                // 初始化对焦/曝光基线：连续自动对焦 + 连续自动曝光，中心区域优先
+                self.applyFocusMode(on: defaultLens.device)
+                self.addTapToFocus()
+
+                // 告诉 UI：当前设备支持哪些档位
+                self.onLensesChanged?(self.rearLenses.map { $0.title }, self.currentRearIndex)
+            }
+
             session.startRunning()
-        }
-
-        // 告诉 UI：当前设备支持哪些档位
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-            self.onLensesChanged?(self.rearLenses.map { $0.title }, self.currentRearIndex)
         }
     }
 
@@ -861,6 +880,13 @@ class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsD
     }
 
     private func showPermissionAlert() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, self.presentedViewController == nil else { return }
+            self.presentPermissionAlert()
+        }
+    }
+
+    private func presentPermissionAlert() {
         let alert = UIAlertController(title: "需要相机权限", message: "请在设置中允许此应用访问相机", preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "去设置", style: .default) { _ in
             if let url = URL(string: UIApplication.openSettingsURLString) {
@@ -872,6 +898,14 @@ class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsD
     }
 
     private func showError(_ message: String) {
+        // setupCamera 在后台队列上跑，弹窗必须回主线程
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, self.presentedViewController == nil else { return }
+            self.presentErrorAlert(message)
+        }
+    }
+
+    private func presentErrorAlert(_ message: String) {
         let alert = UIAlertController(title: "错误", message: message, preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "确定", style: .default))
         present(alert, animated: true)
