@@ -30,7 +30,6 @@ class HistoryManager: ObservableObject {
             records = Array(records.prefix(maxRecords))
         }
         saveRecords()
-        StatisticsManager.shared.incrementScanCount()
         return record.id
     }
 
