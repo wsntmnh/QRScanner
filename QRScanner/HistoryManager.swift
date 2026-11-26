@@ -22,7 +22,8 @@ class HistoryManager: ObservableObject {
         loadRecords()
     }
 
-    func addRecord(content: String, source: ScanRecord.ScanSource, symbology: String = "未知", direction: ScanRecord.VINDirection? = nil) {
+    @discardableResult
+    func addRecord(content: String, source: ScanRecord.ScanSource, symbology: String = "未知", direction: ScanRecord.VINDirection? = nil) -> UUID {
         let record = ScanRecord(content: content, source: source, symbology: symbology, direction: direction)
         records.insert(record, at: 0)
         if records.count > maxRecords {
@@ -30,6 +31,16 @@ class HistoryManager: ObservableObject {
         }
         saveRecords()
         StatisticsManager.shared.incrementScanCount()
+        return record.id
+    }
+
+    /// 拍照拍完后再选择入库/出库：回填方向到已保存的记录
+    func updateDirection(recordID: UUID, direction: ScanRecord.VINDirection) {
+        guard let index = records.firstIndex(where: { $0.id == recordID }) else { return }
+        let old = records[index]
+        records[index] = ScanRecord(id: old.id, content: old.content, timestamp: old.timestamp,
+                                    source: old.source, symbology: old.symbology, direction: direction)
+        saveRecords()
     }
 
     func deleteRecord(_ record: ScanRecord) {
