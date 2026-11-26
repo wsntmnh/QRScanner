@@ -644,6 +644,25 @@ struct SettingsView: View {
                                 .foregroundColor(Color(.tertiaryLabel))
                         }
                     }
+
+                    NavigationLink {
+                        DataExportView()
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "square.and.arrow.up")
+                                .foregroundColor(.indigo)
+                                .frame(width: 28)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("导出数据")
+                                    .font(.system(size: 16))
+                                    .foregroundColor(.primary)
+                                Text("按时间范围与类别整理，导出 CSV / JSON / TXT，可复制到剪贴板")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.secondary)
+                            }
+                            Spacer()
+                        }
+                    }
                 }
 
                 Section(header: Text("数据统计")) {
