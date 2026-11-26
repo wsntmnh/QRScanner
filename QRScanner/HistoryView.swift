@@ -186,6 +186,16 @@ struct RecordRow: View {
                     .background(Color.gray.opacity(0.12))
                     .clipShape(Capsule())
 
+                if let direction = record.direction {
+                    Label(direction.rawValue, systemImage: direction.icon)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(direction == .inbound ? .green : .orange)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background((direction == .inbound ? Color.green : Color.orange).opacity(0.12))
+                        .clipShape(Capsule())
+                }
+
                 Text(record.formattedTime)
                     .font(.system(size: 12))
                     .foregroundColor(.secondary)
@@ -233,7 +243,6 @@ enum ExportTimeRange: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 
     /// 时间区间（start 含、end 不含；nil 表示该端不限制）
-    /// 「指定某一天」取所选日期的 0 点到次日 0 点
     func interval(selectedDay: Date) -> (start: Date?, end: Date?) {
         let calendar = Calendar.current
         let todayStart = calendar.startOfDay(for: Date())
@@ -249,38 +258,48 @@ enum ExportTimeRange: String, CaseIterable, Identifiable {
     }
 }
 
-/// 导出格式
+/// 导出格式：TXT 排第一，也是默认格式
 enum ExportFormat: String, CaseIterable, Identifiable {
+    case txt = "TXT（纯文本）"
     case csv = "CSV（Excel 可打开）"
     case json = "JSON（结构化）"
-    case txt = "TXT（纯文本）"
 
     var id: String { rawValue }
 
     var fileExtension: String {
         switch self {
+        case .txt: return "txt"
         case .csv: return "csv"
         case .json: return "json"
-        case .txt: return "txt"
         }
     }
 }
 
-/// 只导出车架号时的 JSON 结构：合计条数 + 车架号清单
-private struct VinExportItem: Encodable {
-    let vin: String
-    let time: String
+/// 导出内容项目：车架号（或扫码内容）始终导出，这里控制额外附加哪些项目
+enum ExportField: String, CaseIterable, Identifiable {
+    case direction = "入库/出库"
+    case time = "扫描时间"
+    case source = "来源"
+    case symbology = "码制"
+
+    var id: String { rawValue }
 }
 
-private struct VinExportPayload: Encodable {
-    let total: Int
-    let items: [VinExportItem]
-}
+/// 出入库筛选
+enum DirectionFilter: String, CaseIterable, Identifiable {
+    case all = "全部"
+    case inbound = "仅入库"
+    case outbound = "仅出库"
 
-/// 完整导出时的 JSON 结构：合计条数 + 原始记录
-private struct RecordExportPayload: Encodable {
-    let total: Int
-    let items: [ScanRecord]
+    var id: String { rawValue }
+
+    var direction: ScanRecord.VINDirection? {
+        switch self {
+        case .all: return nil
+        case .inbound: return .inbound
+        case .outbound: return .outbound
+        }
+    }
 }
 
 struct DataExportView: View {
@@ -289,24 +308,36 @@ struct DataExportView: View {
     @State private var range: ExportTimeRange = .all
     /// 「指定某一天」用的日期
     @State private var selectedDay = Date()
-    @State private var format: ExportFormat = .csv
+    @State private var format: ExportFormat = .txt
+    @State private var directionFilter: DirectionFilter = .all
     /// 车架号（VIN）前 5 位前缀筛选，"全部" 表示不按前缀过滤
     @State private var vinPrefixFilter = "全部"
-    /// 只导出完整车架号：开启后仅保留能被识别为完整 VIN 的记录，导出文件只含车架号
+    /// 只导出完整车架号：开启后仅保留能被识别为完整 VIN 的记录
     @State private var vinOnly = true
+    /// 导出内容项目（车架号/内容之外的附加项）
+    @State private var fields: Set<ExportField> = [.direction, .time]
+    /// 手动添加的品牌前缀
+    @State private var userBrands: [String: String] = [:]
+    @State private var newPrefix = ""
+    @State private var newBrand = ""
     @State private var copiedCount = 0
     @State private var showCopied = false
     @State private var shareURL: URL?
     @State private var showShare = false
 
+    private let brandMapKey = "vin_brand_map"
+
     // MARK: 数据整理
 
-    /// 按「时间范围 + 车架号前缀」筛选后的记录（保持最新在前）
+    /// 按「时间范围 + 出入库 + 车架号前缀」筛选后的记录（保持最新在前）
     private var exportRecords: [ScanRecord] {
         let bounds = range.interval(selectedDay: selectedDay)
         return historyManager.records.filter { record in
             if let start = bounds.start, record.timestamp < start { return false }
             if let end = bounds.end, record.timestamp >= end { return false }
+            if let wanted = directionFilter.direction {
+                guard record.direction == wanted else { return false }
+            }
             if vinOnly, vinString(of: record.content) == nil { return false }
             if vinPrefixFilter != "全部" {
                 guard let prefix = vinPrefix(of: record.content), prefix == vinPrefixFilter else { return false }
@@ -315,28 +346,18 @@ struct DataExportView: View {
         }
     }
 
-    /// 车架号（VIN）判定：17 位字母数字、不含 I/O/Q（VIN 规范禁用这三个字母）。
-    /// 车架号的第 1–3 位是制造商代码（WMI），前 5 位即「制造商 + 车型系列」标识，适合做归类键。
     private func vinString(of content: String) -> String? {
-        let value = content.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
-        guard value.count == 17 else { return nil }
-        let allowed = CharacterSet(charactersIn: "ABCDEFGHJKLMNPRSTUVWXYZ0123456789")
-        guard value.unicodeScalars.allSatisfy({ allowed.contains($0) }) else { return nil }
-        return value
+        ScanRecord.vinString(from: content)
     }
 
     private func vinPrefix(of content: String) -> String? {
         vinString(of: content).map { String($0.prefix(5)) }
     }
 
-    /// 车架号前 5 位 / 前 3 位（WMI）对应的品牌名。
-    /// 5 位优先（同厂家不同车型系列），认不出 5 位再退回 3 位 WMI；都没有则只显示前缀。
-    /// 需要补品牌时，直接在这里加一行即可。
-    private static let vinBrands: [String: String] = [
-        // 5 位：具体车型系列
+    /// 内置品牌表：5 位优先（具体车型系列），认不出再退回 3 位 WMI
+    private static let builtinBrands: [String: String] = [
         "LSJEM": "尚界",
         "LSJEK": "荣威",
-        // 3 位：WMI 厂家（作为兜底）
         "LSV": "上汽大众",
         "LFV": "一汽-大众",
         "LSG": "上汽通用",
@@ -351,9 +372,12 @@ struct DataExportView: View {
         "LDC": "神龙汽车"
     ]
 
+    /// 手动添加的优先，其后是内置表；5 位认不出时退回 3 位 WMI
     private func brandName(for prefix: String) -> String? {
-        if let exact = Self.vinBrands[prefix] { return exact }
-        return Self.vinBrands[String(prefix.prefix(3))]
+        if let name = userBrands[prefix] { return name }
+        if let name = Self.builtinBrands[prefix] { return name }
+        let wmi = String(prefix.prefix(3))
+        return userBrands[wmi] ?? Self.builtinBrands[wmi]
     }
 
     /// 现有记录里的车架号前缀分布（按条数降序）
@@ -369,12 +393,48 @@ struct DataExportView: View {
             .map { (prefix: $0.key, count: $0.value) }
     }
 
-    /// 当前筛选结果里含车架号的条数
     private var vinRecordCount: Int {
-        exportRecords.filter { vinPrefix(of: $0.content) != nil }.count
+        exportRecords.filter { vinString(of: $0.content) != nil }.count
+    }
+
+    private var inboundCount: Int { exportRecords.filter { $0.direction == .inbound }.count }
+    private var outboundCount: Int { exportRecords.filter { $0.direction == .outbound }.count }
+
+    private var userBrandKeys: [String] { userBrands.keys.sorted() }
+
+    private var canAddBrand: Bool {
+        let prefix = newPrefix.trimmingCharacters(in: .whitespaces).uppercased()
+        let brand = newBrand.trimmingCharacters(in: .whitespaces)
+        guard brand.count > 0, prefix.count == 3 || prefix.count == 5 else { return false }
+        let allowed = CharacterSet(charactersIn: "ABCDEFGHJKLMNPRSTUVWXYZ0123456789")
+        return prefix.unicodeScalars.allSatisfy { allowed.contains($0) }
     }
 
     // MARK: 文本生成
+
+    /// 当前勾选的附加项目（按固定顺序）
+    private var selectedFields: [ExportField] {
+        ExportField.allCases.filter { fields.contains($0) }
+    }
+
+    private var exportHeader: [String] {
+        var titles = [vinOnly ? "车架号" : "内容"]
+        for field in selectedFields { titles.append(field.rawValue) }
+        return titles
+    }
+
+    private func exportRow(_ record: ScanRecord) -> [String] {
+        var values = [vinOnly ? (vinString(of: record.content) ?? "") : record.content]
+        for field in selectedFields {
+            switch field {
+            case .direction: values.append(record.direction?.rawValue ?? "未标记")
+            case .time: values.append(record.formattedTime)
+            case .source: values.append(record.source.rawValue)
+            case .symbology: values.append(record.symbology)
+            }
+        }
+        return values
+    }
 
     private var exportText: String {
         let records = exportRecords
@@ -393,50 +453,12 @@ struct DataExportView: View {
     }
 
     private func csvText(_ records: [ScanRecord]) -> String {
-        if vinOnly {
-            var lines = ["车架号,扫描时间"]
-            for record in records {
-                guard let vin = vinString(of: record.content) else { continue }
-                lines.append([vin, record.formattedTime]
-                    .map(csvField).joined(separator: ","))
-            }
-            lines.append("合计,\(lines.count - 1) 条")
-            return lines.joined(separator: "\n")
-        }
-        var lines = ["序号,时间,来源,码制,类型,内容"]
-        for (index, record) in records.enumerated() {
-            let fields = [
-                "\(index + 1)",
-                record.formattedTime,
-                record.source.rawValue,
-                record.symbology,
-                record.typeName,
-                record.content
-            ]
-            lines.append(fields.map(csvField).joined(separator: ","))
+        var lines = [exportHeader.map(csvField).joined(separator: ",")]
+        for record in records {
+            lines.append(exportRow(record).map(csvField).joined(separator: ","))
         }
         lines.append("合计,\(records.count) 条")
         return lines.joined(separator: "\n")
-    }
-
-    private func jsonText(_ records: [ScanRecord]) -> String {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .withoutEscapingSlashes]
-
-        if vinOnly {
-            let items = records.compactMap { record -> VinExportItem? in
-                guard let vin = vinString(of: record.content) else { return nil }
-                return VinExportItem(vin: vin, time: record.formattedTime)
-            }
-            guard let data = try? encoder.encode(VinExportPayload(total: items.count, items: items)),
-                  let text = String(data: data, encoding: .utf8) else { return "" }
-            return text
-        }
-
-        encoder.dateEncodingStrategy = .iso8601
-        guard let data = try? encoder.encode(RecordExportPayload(total: records.count, items: records)),
-              let text = String(data: data, encoding: .utf8) else { return "" }
-        return text
     }
 
     private func txtText(_ records: [ScanRecord]) -> String {
@@ -446,35 +468,31 @@ struct DataExportView: View {
 
         var lines: [String] = [
             "# QRScanner 扫描记录导出",
-            "# 范围：\(range.rawValue) 条数：\(records.count)",
+            "# 范围：\(range.rawValue) 方向：\(directionFilter.rawValue) 条数：\(records.count)",
             "# 导出时间：\(formatter.string(from: Date()))",
-            "# 时间\t来源\t码制\t类型\t内容"
+            "# " + exportHeader.joined(separator: "\t")
         ]
-        if vinOnly {
-            var vinLines: [String] = [
-                "# QRScanner 车架号导出",
-                "# 范围：\(range.rawValue)，条数：\(records.count)",
-                "# 导出时间：\(formatter.string(from: Date()))",
-                "# 车架号\t扫描时间"
-            ]
-            for record in records {
-                guard let vin = vinString(of: record.content) else { continue }
-                vinLines.append("\(vin)\t\(record.formattedTime)")
-            }
-            vinLines.append("# 合计：\(records.count) 条")
-            return vinLines.joined(separator: "\n")
-        }
         for record in records {
-            lines.append([
-                record.formattedTime,
-                record.source.rawValue,
-                record.symbology,
-                record.typeName,
-                record.content
-            ].joined(separator: "\t"))
+            lines.append(exportRow(record).joined(separator: "\t"))
         }
         lines.append("# 合计：\(records.count) 条")
         return lines.joined(separator: "\n")
+    }
+
+    private func jsonText(_ records: [ScanRecord]) -> String {
+        let header = exportHeader
+        let items = records.map { record -> [String: String] in
+            var dict: [String: String] = [:]
+            let values = exportRow(record)
+            for (index, key) in header.enumerated() where index < values.count {
+                dict[key] = values[index]
+            }
+            return dict
+        }
+        let payload: [String: Any] = ["total": records.count, "items": items]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .withoutEscapingSlashes]),
+              let text = String(data: data, encoding: .utf8) else { return "" }
+        return text
     }
 
     /// CSV 字段转义：含逗号、引号、换行时用双引号包裹
@@ -483,6 +501,34 @@ struct DataExportView: View {
             return "\"" + value.replacingOccurrences(of: "\"", with: "\"\"") + "\""
         }
         return value
+    }
+
+    // MARK: 品牌前缀管理
+
+    private func loadBrands() {
+        userBrands = UserDefaults.standard.dictionary(forKey: brandMapKey) as? [String: String] ?? [:]
+    }
+
+    private func persistBrands() {
+        UserDefaults.standard.set(userBrands, forKey: brandMapKey)
+    }
+
+    private func addBrand() {
+        let prefix = newPrefix.trimmingCharacters(in: .whitespaces).uppercased()
+        let brand = newBrand.trimmingCharacters(in: .whitespaces)
+        guard canAddBrand else { return }
+        userBrands[prefix] = brand
+        persistBrands()
+        newPrefix = ""
+        newBrand = ""
+    }
+
+    private func deleteBrand(at offsets: IndexSet) {
+        let keys = userBrandKeys
+        for index in offsets where index < keys.count {
+            userBrands.removeValue(forKey: keys[index])
+        }
+        persistBrands()
     }
 
     // MARK: 复制 / 分享
@@ -528,13 +574,20 @@ struct DataExportView: View {
                 }
             }
 
+            Section(header: Text("入库 / 出库"),
+                    footer: Text("入库、出库分开记录，可分别导出，也可以一次导出全部。")) {
+                Picker("选择方向", selection: $directionFilter) {
+                    ForEach(DirectionFilter.allCases) { Text($0.rawValue).tag($0) }
+                }
+            }
+
             Section(header: Text("车架号归类"),
                     footer: Text("按车架号（VIN）前 5 位归类：前 3 位是制造商代码（WMI），前 5 位即「厂家 + 车型系列」。只识别 17 位、不含 I/O/Q 的字母数字。")) {
                 Toggle(isOn: $vinOnly) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("只导出完整车架号")
                             .font(.system(size: 16))
-                        Text(vinOnly ? "只保留 17 位完整车架号，文件里不含其他扫码内容" : "导出全部记录（含非车架号内容）")
+                        Text(vinOnly ? "只保留 17 位完整车架号，不含其他扫码内容" : "导出全部记录（含非车架号内容）")
                             .font(.system(size: 12))
                             .foregroundColor(.secondary)
                     }
@@ -580,6 +633,51 @@ struct DataExportView: View {
                 }
             }
 
+            Section(header: Text("品牌前缀（可手动添加）"),
+                    footer: Text("填车架号前 5 位（或前 3 位 WMI）+ 品牌名。手动添加的排在内置表前面，左滑可删除。")) {
+                ForEach(userBrandKeys, id: \.self) { prefix in
+                    HStack(spacing: 8) {
+                        Text(prefix)
+                            .font(.system(size: 14, weight: .medium, design: .monospaced))
+                        Text(userBrands[prefix] ?? "")
+                            .font(.system(size: 14))
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Image(systemName: "minus.circle.fill")
+                            .foregroundColor(.red)
+                            .onTapGesture {
+                                userBrands.removeValue(forKey: prefix)
+                                persistBrands()
+                            }
+                    }
+                }
+
+                HStack(spacing: 8) {
+                    TextField("前缀（3 或 5 位）", text: $newPrefix)
+                        .textInputAutocapitalization(.characters)
+                        .autocorrectionDisabled()
+                        .font(.system(size: 14))
+                        .frame(width: 120)
+                    TextField("品牌名", text: $newBrand)
+                        .font(.system(size: 14))
+                    Button("添加") { addBrand() }
+                        .font(.system(size: 14, weight: .semibold))
+                        .disabled(!canAddBrand)
+                }
+            }
+
+            Section(header: Text("导出内容项目"),
+                    footer: Text(vinOnly ? "车架号始终导出，上面勾选的是附加项目。" : "扫码内容始终导出，上面勾选的是附加项目。")) {
+                ForEach(ExportField.allCases) { field in
+                    Toggle(field.rawValue, isOn: Binding(
+                        get: { fields.contains(field) },
+                        set: { isOn in
+                            if isOn { fields.insert(field) } else { fields.remove(field) }
+                        }
+                    ))
+                }
+            }
+
             Section(header: Text("文件格式")) {
                 Picker("选择格式", selection: $format) {
                     ForEach(ExportFormat.allCases) { Text($0.rawValue).tag($0) }
@@ -591,6 +689,11 @@ struct DataExportView: View {
                     Text("可导出")
                     Spacer()
                     Text("\(exportRecords.count) 条").foregroundColor(.secondary)
+                }
+                HStack {
+                    Text("入库 / 出库")
+                    Spacer()
+                    Text("\(inboundCount) / \(outboundCount)").foregroundColor(.secondary)
                 }
                 HStack {
                     Text("含车架号 / 前缀数")
@@ -631,6 +734,7 @@ struct DataExportView: View {
         .listStyle(.insetGrouped)
         .navigationTitle("导出数据")
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear { loadBrands() }
         .overlay {
             if showCopied {
                 Text("已复制 \(copiedCount) 条记录到剪贴板")
