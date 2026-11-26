@@ -51,6 +51,23 @@ struct ScanRecord: Identifiable, Codable, Equatable {
         self.direction = direction
     }
 
+    /// 从任意扫码内容里取出 17 位车架号：允许前后带 "VIN:"、空格、括号等噪声。
+    /// 先按整串严格判定，再清洗出字母数字、找 17 位且不含 I/O/Q 的片段。
+    static func vinInText(_ content: String) -> String? {
+        if let exact = vinString(from: content) { return exact }
+
+        let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+        let cleaned = String(content.uppercased().unicodeScalars.filter { allowed.contains($0) }.map(Character.init))
+        let chars = Array(cleaned)
+        guard chars.count >= 17 else { return nil }
+        let banned: Set<Character> = ["I", "O", "Q"]
+        for start in 0...(chars.count - 17) {
+            let candidate = String(chars[start..<(start + 17)])
+            if !candidate.contains(where: { banned.contains($0) }) { return candidate }
+        }
+        return nil
+    }
+
     /// 完整车架号判定：17 位、字母数字、不含 I/O/Q（VIN 规范禁用），统一转大写
     static func vinString(from content: String) -> String? {
         let value = content.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
