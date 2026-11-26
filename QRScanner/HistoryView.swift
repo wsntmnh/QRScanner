@@ -277,6 +277,7 @@ enum ExportFormat: String, CaseIterable, Identifiable {
 
 /// 导出内容项目：车架号（或扫码内容）始终导出，这里控制额外附加哪些项目
 enum ExportField: String, CaseIterable, Identifiable {
+    case brand = "品牌"
     case direction = "入库/出库"
     case time = "扫描时间"
     case source = "来源"
@@ -315,7 +316,7 @@ struct DataExportView: View {
     /// 只导出完整车架号：开启后仅保留能被识别为完整 VIN 的记录
     @State private var vinOnly = true
     /// 导出内容项目（车架号/内容之外的附加项）
-    @State private var fields: Set<ExportField> = [.direction, .time]
+    @State private var fields: Set<ExportField> = [.brand, .direction, .time]
     /// 手动添加的品牌前缀
     @State private var userBrands: [String: String] = [:]
     @State private var newPrefix = ""
@@ -427,6 +428,12 @@ struct DataExportView: View {
         var values = [vinOnly ? (vinString(of: record.content) ?? "") : record.content]
         for field in selectedFields {
             switch field {
+            case .brand:
+                if let prefix = vinPrefix(of: record.content), let brand = brandName(for: prefix) {
+                    values.append(brand)
+                } else {
+                    values.append("")
+                }
             case .direction: values.append(record.direction?.rawValue ?? "未标记")
             case .time: values.append(record.formattedTime)
             case .source: values.append(record.source.rawValue)
