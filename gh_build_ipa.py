@@ -162,8 +162,8 @@ def main():
     if conclusion != "success":
         sys.exit(f"❌ 构建失败（{conclusion}），请打开 https://github.com/{owner}/{repo}/actions 查看日志")
 
-    # 5) 下载 artifact
-    code, arts = call("GET", f"/repos/{owner}/{repo}/actions/artifacts?per_page=20", tok)
+    # 5) 下载 artifact（只取本次运行的产物，避免拿到上一次的旧包）
+    code, arts = call("GET", f"/repos/{owner}/{repo}/actions/runs/{run_id}/artifacts", tok)
     target = None
     for a in arts.get("artifacts", []):
         if a["name"] == "QRScanner-unsigned-ipa" and not a.get("expired"):
