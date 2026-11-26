@@ -41,9 +41,10 @@ struct ContentView: View {
     // 启动兜底：相机长时间没起来时给出可操作的提示，而不是停在空白画面
     @State private var showBootFallback = false
 
-    // 出入库：扫到码后先让用户选择方向，再落库
-    @State private var pendingContent: String?
-    @State private var pendingSymbology = ""
+    // 出入库：记录先落库，等照片拍完再让用户选择方向（未拍照时直接弹）
+    @State private var pendingDirectionRecordID: UUID?
+    @State private var pendingDirectionText: String?
+    @State private var pendingPhoto: UIImage?
     @State private var showDirectionPicker = false
 
     var body: some View {
@@ -262,7 +263,7 @@ struct ContentView: View {
             }
 
             // 车架号出入库选择
-            if showDirectionPicker, let content = pendingContent {
+            if showDirectionPicker, let content = pendingDirectionText {
                 let vin = ScanRecord.vinInText(content)
                 VStack(spacing: 18) {
                     VStack(spacing: 6) {
@@ -420,26 +421,25 @@ struct ContentView: View {
 
     // MARK: - 扫描结果处理
     private func handleScanResult(result: String, symbology: String, source: ScanRecord.ScanSource = .camera) {
-        // 相机扫到任何码（二维码 / 条形码 / 车架号）都先让用户选入库还是出库
-        if source == .camera {
-            pendingContent = result
-            pendingSymbology = symbology
-            lastScanSource = .camera
-            UINotificationFeedbackGenerator().notificationOccurred(.warning)
-            withAnimation { showDirectionPicker = true }
-            return
-        }
-        finishScan(result: result, symbology: symbology, source: source, direction: nil)
+        // 内容里能找出 17 位车架号就只存车架号，导出一份干净的车架号清单
+        let normalized = ScanRecord.vinInText(result) ?? result
+        finishScan(result: normalized, symbology: symbology, source: source, direction: nil)
     }
 
-    /// 选定出入库方向后继续走原来的记录/复制/拍照流程
+    /// 选定入库/出库后回填到已保存的记录上，再看照片预览
     private func confirmVINDirection(_ direction: ScanRecord.VINDirection?) {
-        guard let content = pendingContent else { return }
-        // 内容里能找出 17 位车架号就只存车架号，导出一份干净的车架号清单
-        let normalized = ScanRecord.vinInText(content) ?? content
+        if let id = pendingDirectionRecordID, let direction = direction {
+            HistoryManager.shared.updateDirection(recordID: id, direction: direction)
+        }
         withAnimation { showDirectionPicker = false }
-        pendingContent = nil
-        finishScan(result: normalized, symbology: pendingSymbology, source: .camera, direction: direction)
+        pendingDirectionRecordID = nil
+        pendingDirectionText = nil
+
+        // 自动拍照模式下照片已拍好，选完方向再进预览
+        if let image = pendingPhoto {
+            pendingPhoto = nil
+            showPreviewPhoto(image)
+        }
     }
 
     private func finishScan(result: String, symbology: String, source: ScanRecord.ScanSource, direction: ScanRecord.VINDirection?) {
@@ -447,7 +447,7 @@ struct ContentView: View {
         let generator = UINotificationFeedbackGenerator()
         generator.notificationOccurred(.success)
 
-        HistoryManager.shared.addRecord(content: result, source: source, symbology: symbology, direction: direction)
+        let recordID = HistoryManager.shared.addRecord(content: result, source: source, symbology: symbology, direction: direction)
         UIPasteboard.general.string = result
 
         successMessage = result
@@ -470,11 +470,18 @@ struct ContentView: View {
             withAnimation {
                 showSuccess = true
             }
+            // 照片拍完后再弹入库/出库选择（见 handlePhotoCaptured）
+            pendingDirectionRecordID = recordID
+            pendingDirectionText = result
             scannerController?.capturePhoto(playSound: settings.playShutterSound, watermarkContent: result)
         } else {
             withAnimation {
                 showSuccess = true
             }
+            // 没开自动拍照：直接弹入库/出库选择
+            pendingDirectionRecordID = recordID
+            pendingDirectionText = result
+            withAnimation { showDirectionPicker = true }
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                 withAnimation {
                     showSuccess = false
@@ -486,6 +493,21 @@ struct ContentView: View {
 
     // MARK: - 照片拍摄完成，显示预览
     private func handlePhotoCaptured(image: UIImage) {
+        // 还没选入库/出库：先弹出选择，选完再显示预览
+        if pendingDirectionRecordID != nil {
+            pendingPhoto = image
+            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+            withAnimation {
+                showSuccess = false
+                showDirectionPicker = true
+            }
+            return
+        }
+        showPreviewPhoto(image)
+    }
+
+    /// 进入照片预览
+    private func showPreviewPhoto(_ image: UIImage) {
         previewImage = image
         // 预览期间暂停取景，省电降温；关闭预览时通过 resetScan 恢复
         scannerController?.pauseCapture()
@@ -499,6 +521,11 @@ struct ContentView: View {
     private func handlePhotoCaptureFailed(_ message: String) {
         withAnimation {
             showSuccess = false
+        }
+        // 拍照失败不能让入库/出库选择丢在路上
+        if pendingDirectionRecordID != nil {
+            pendingPhoto = nil
+            withAnimation { showDirectionPicker = true }
         }
         showError(message: message)
         resetScanFlag = true
@@ -752,7 +779,6 @@ struct SettingsView: View {
     @ObservedObject private var settings = SettingsManager.shared
     @State private var showHistory = false
     @ObservedObject private var historyManager = HistoryManager.shared
-    @ObservedObject private var statsManager = StatisticsManager.shared
 
     var body: some View {
         NavigationView {
@@ -794,27 +820,6 @@ struct SettingsView: View {
                                     .font(.system(size: 16))
                                     .foregroundColor(.primary)
                                 Text("按时间范围与类别整理，导出 CSV / JSON / TXT，可复制到剪贴板")
-                                    .font(.system(size: 12))
-                                    .foregroundColor(.secondary)
-                            }
-                            Spacer()
-                        }
-                    }
-                }
-
-                Section(header: Text("数据统计")) {
-                    NavigationLink {
-                        StatisticsView()
-                    } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: "chart.bar.fill")
-                                .foregroundColor(.green)
-                                .frame(width: 28)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("扫描统计")
-                                    .font(.system(size: 16))
-                                    .foregroundColor(.primary)
-                                Text("今日 \(statsManager.todayTotal) 次 · 累计 \(statsManager.allTimeTotal) 次")
                                     .font(.system(size: 12))
                                     .foregroundColor(.secondary)
                             }
