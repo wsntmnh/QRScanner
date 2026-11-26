@@ -41,9 +41,9 @@ struct ContentView: View {
     // 启动兜底：相机长时间没起来时给出可操作的提示，而不是停在空白画面
     @State private var showBootFallback = false
 
-    // 车架号出入库：扫到 VIN 后先让用户选择方向，再落库
-    @State private var pendingVIN: String?
-    @State private var pendingVINSymbology = ""
+    // 出入库：扫到码后先让用户选择方向，再落库
+    @State private var pendingContent: String?
+    @State private var pendingSymbology = ""
     @State private var showDirectionPicker = false
 
     var body: some View {
@@ -262,15 +262,19 @@ struct ContentView: View {
             }
 
             // 车架号出入库选择
-            if showDirectionPicker, let vin = pendingVIN {
+            if showDirectionPicker, let content = pendingContent {
+                let vin = ScanRecord.vinInText(content)
                 VStack(spacing: 18) {
                     VStack(spacing: 6) {
-                        Text("识别到车架号")
+                        Text(vin != nil ? "识别到车架号" : "识别到扫码内容")
                             .font(.system(size: 13))
                             .foregroundColor(.white.opacity(0.7))
-                        Text(vin)
-                            .font(.system(size: 17, weight: .semibold, design: .monospaced))
+                        Text(vin ?? content)
+                            .font(.system(size: vin != nil ? 17 : 15, weight: .semibold, design: .monospaced))
                             .foregroundColor(.white)
+                            .lineLimit(3)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 12)
                     }
 
                     HStack(spacing: 14) {
@@ -416,11 +420,11 @@ struct ContentView: View {
 
     // MARK: - 扫描结果处理
     private func handleScanResult(result: String, symbology: String, source: ScanRecord.ScanSource = .camera) {
-        // 车架号（17 位完整 VIN）需要先选入库/出库，选完再记录
-        if source == .camera, let vin = ScanRecord.vinString(from: result) {
-            pendingVIN = vin
-            pendingVINSymbology = symbology
-            lastScanSource = source
+        // 相机扫到任何码（二维码 / 条形码 / 车架号）都先让用户选入库还是出库
+        if source == .camera {
+            pendingContent = result
+            pendingSymbology = symbology
+            lastScanSource = .camera
             UINotificationFeedbackGenerator().notificationOccurred(.warning)
             withAnimation { showDirectionPicker = true }
             return
@@ -430,10 +434,12 @@ struct ContentView: View {
 
     /// 选定出入库方向后继续走原来的记录/复制/拍照流程
     private func confirmVINDirection(_ direction: ScanRecord.VINDirection?) {
-        guard let vin = pendingVIN else { return }
+        guard let content = pendingContent else { return }
+        // 内容里能找出 17 位车架号就只存车架号，导出一份干净的车架号清单
+        let normalized = ScanRecord.vinInText(content) ?? content
         withAnimation { showDirectionPicker = false }
-        pendingVIN = nil
-        finishScan(result: vin, symbology: pendingVINSymbology, source: .camera, direction: direction)
+        pendingContent = nil
+        finishScan(result: normalized, symbology: pendingSymbology, source: .camera, direction: direction)
     }
 
     private func finishScan(result: String, symbology: String, source: ScanRecord.ScanSource, direction: ScanRecord.VINDirection?) {
