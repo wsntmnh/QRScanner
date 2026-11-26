@@ -17,6 +17,7 @@ class SettingsManager: ObservableObject {
     
     private let autoSavePhotoKey = "auto_save_photo_enabled"
     private let playShutterSoundKey = "play_shutter_sound_enabled"
+    private let autoCaptureKey = "auto_capture_enabled"
     private let photoQualityKey = "photo_quality_preset"
     private let watermarkFontSizeKey = "watermark_font_size"
     private let showLocationInWatermarkKey = "show_location_in_watermark"
@@ -155,6 +156,13 @@ class SettingsManager: ObservableObject {
         }
     }
     
+    /// 自动拍照：识别到码后不再等用户按快门，立即自动拍一张（拍完走预览，是否存相册由“扫描后拍照预览”决定）
+    @Published var autoCaptureEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(autoCaptureEnabled, forKey: autoCaptureKey)
+        }
+    }
+
     @Published var playShutterSound: Bool {
         didSet {
             UserDefaults.standard.set(playShutterSound, forKey: playShutterSoundKey)
@@ -221,6 +229,7 @@ class SettingsManager: ObservableObject {
     private init() {
         self.autoSavePhoto = UserDefaults.standard.bool(forKey: autoSavePhotoKey)
         self.playShutterSound = UserDefaults.standard.object(forKey: playShutterSoundKey) as? Bool ?? true
+        self.autoCaptureEnabled = UserDefaults.standard.bool(forKey: autoCaptureKey)
         
         let savedQuality = UserDefaults.standard.string(forKey: photoQualityKey)
         self.photoQuality = PhotoQuality.allCases.first { $0.rawValue == savedQuality } ?? .photo
