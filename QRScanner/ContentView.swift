@@ -426,15 +426,18 @@ struct ContentView: View {
 
         // 同样的数据只记一次：相机几秒内反复上报同一条 → 直接跳过
         if source == .camera, HistoryManager.shared.hasRecentRecord(content: normalized, within: 5) {
+            // 不重复入库，但把内容照旧复制到剪贴板，方便直接粘贴使用
+            UIPasteboard.general.string = normalized
             UINotificationFeedbackGenerator().notificationOccurred(.warning)
-            showError(message: "刚记录过，已跳过重复")
+            showError(message: "刚记录过，未重复添加（已复制到剪贴板）")
             scannerController?.resetScan()
             return
         }
         // 相册导入：历史里已有完全相同的内容就不再新增
         if source == .photoLibrary, HistoryManager.shared.hasAnyRecord(content: normalized) {
+            UIPasteboard.general.string = normalized
             UINotificationFeedbackGenerator().notificationOccurred(.warning)
-            showError(message: "该内容已存在，未重复记录")
+            showError(message: "该内容已存在，未重复记录（已复制到剪贴板）")
             resetScanFlag = true
             return
         }
@@ -460,8 +463,11 @@ struct ContentView: View {
         if duplicateSkipped {
             pendingPhoto = nil
             scannerController?.resetScan()
+            if let text = pendingDirectionText {
+                UIPasteboard.general.string = ScanRecord.vinInText(text) ?? text
+            }
             UINotificationFeedbackGenerator().notificationOccurred(.warning)
-            showError(message: "该车架号已有\(direction?.rawValue ?? "")记录，未重复记录")
+            showError(message: "该车架号已有\(direction?.rawValue ?? "")记录，未重复添加（已复制到剪贴板）")
         }
         withAnimation { showDirectionPicker = false }
         pendingDirectionRecordID = nil
