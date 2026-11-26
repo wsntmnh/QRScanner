@@ -423,13 +423,45 @@ struct ContentView: View {
     private func handleScanResult(result: String, symbology: String, source: ScanRecord.ScanSource = .camera) {
         // 内容里能找出 17 位车架号就只存车架号，导出一份干净的车架号清单
         let normalized = ScanRecord.vinInText(result) ?? result
+
+        // 同样的数据只记一次：相机几秒内反复上报同一条 → 直接跳过
+        if source == .camera, HistoryManager.shared.hasRecentRecord(content: normalized, within: 5) {
+            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+            showError(message: "刚记录过，已跳过重复")
+            scannerController?.resetScan()
+            return
+        }
+        // 相册导入：历史里已有完全相同的内容就不再新增
+        if source == .photoLibrary, HistoryManager.shared.hasAnyRecord(content: normalized) {
+            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+            showError(message: "该内容已存在，未重复记录")
+            resetScanFlag = true
+            return
+        }
+
         finishScan(result: normalized, symbology: symbology, source: source, direction: nil)
     }
 
     /// 选定入库/出库后回填到已保存的记录上，再看照片预览
     private func confirmVINDirection(_ direction: ScanRecord.VINDirection?) {
-        if let id = pendingDirectionRecordID, let direction = direction {
-            HistoryManager.shared.updateDirection(recordID: id, direction: direction)
+        var duplicateSkipped = false
+        if let id = pendingDirectionRecordID {
+            if let direction = direction {
+                // 同一车架号 + 同一方向已经记过：把刚记的这条撤掉，不产生重复行
+                if HistoryManager.shared.hasRecord(content: pendingDirectionText.flatMap { ScanRecord.vinInText($0) } ?? "",
+                                                   direction: direction, excluding: id) {
+                    HistoryManager.shared.removeRecord(id: id)
+                    duplicateSkipped = true
+                } else {
+                    HistoryManager.shared.updateDirection(recordID: id, direction: direction)
+                }
+            }
+        }
+        if duplicateSkipped {
+            pendingPhoto = nil
+            scannerController?.resetScan()
+            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+            showError(message: "该车架号已有\(direction?.rawValue ?? "")记录，未重复记录")
         }
         withAnimation { showDirectionPicker = false }
         pendingDirectionRecordID = nil
