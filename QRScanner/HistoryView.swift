@@ -278,6 +278,8 @@ struct DataExportView: View {
     @State private var range: ExportTimeRange = .all
     @State private var category: ExportCategory = .all
     @State private var format: ExportFormat = .csv
+    /// 车架号（VIN）前 5 位前缀筛选，"全部" 表示不按前缀过滤
+    @State private var vinPrefixFilter = "全部"
     @State private var copiedCount = 0
     @State private var showCopied = false
     @State private var shareURL: URL?
@@ -285,19 +287,51 @@ struct DataExportView: View {
 
     // MARK: 数据整理
 
-    /// 按「时间范围 + 类别」筛选后的记录（保持最新在前）
+    /// 按「时间范围 + 类别 + 车架号前缀」筛选后的记录（保持最新在前）
     private var exportRecords: [ScanRecord] {
         let start = range.startDate
         return historyManager.records.filter { record in
             if let start = start, record.timestamp < start { return false }
             switch category {
-            case .all: return true
-            case .qrcode: return !record.isBarcode
-            case .barcode: return record.isBarcode
-            case .camera: return record.source == .camera
-            case .library: return record.source == .photoLibrary
+            case .all: break
+            case .qrcode: if record.isBarcode { return false }
+            case .barcode: if !record.isBarcode { return false }
+            case .camera: if record.source != .camera { return false }
+            case .library: if record.source != .photoLibrary { return false }
+            }
+            if vinPrefixFilter != "全部" {
+                guard let prefix = vinPrefix(of: record.content), prefix == vinPrefixFilter else { return false }
+            }
+            return true
+        }
+    }
+
+    /// 车架号（VIN）判定：17 位字母数字、不含 I/O/Q（VIN 规范禁用这三个字母）。
+    /// 车架号的第 1–3 位是制造商代码（WMI），前 5 位即「制造商 + 车型系列」标识，适合做归类键。
+    private func vinPrefix(of content: String) -> String? {
+        let value = content.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        guard value.count == 17 else { return nil }
+        let allowed = CharacterSet(charactersIn: "ABCDEFGHJKLMNPRSTUVWXYZ0123456789")
+        guard value.unicodeScalars.allSatisfy({ allowed.contains($0) }) else { return nil }
+        return String(value.prefix(5))
+    }
+
+    /// 现有记录里的车架号前缀分布（按条数降序）
+    private var vinPrefixGroups: [(prefix: String, count: Int)] {
+        var counts: [String: Int] = [:]
+        for record in historyManager.records {
+            if let prefix = vinPrefix(of: record.content) {
+                counts[prefix, default: 0] += 1
             }
         }
+        return counts
+            .sorted { $0.value == $1.value ? $0.key < $1.key : $0.value > $1.value }
+            .map { (prefix: $0.key, count: $0.value) }
+    }
+
+    /// 当前筛选结果里含车架号的条数
+    private var vinRecordCount: Int {
+        exportRecords.filter { vinPrefix(of: $0.content) != nil }.count
     }
 
     private var qrCount: Int { exportRecords.filter { !$0.isBarcode }.count }
@@ -324,7 +358,7 @@ struct DataExportView: View {
     }
 
     private func csvText(_ records: [ScanRecord]) -> String {
-        var lines = ["序号,时间,来源,码制,类型,内容"]
+        var lines = ["序号,时间,来源,码制,类型,车架号前5位,内容"]
         for (index, record) in records.enumerated() {
             let fields = [
                 "\(index + 1)",
@@ -332,6 +366,7 @@ struct DataExportView: View {
                 record.source.rawValue,
                 record.symbology,
                 record.typeName,
+                vinPrefix(of: record.content) ?? "",
                 record.content
             ]
             lines.append(fields.map(csvField).joined(separator: ","))
@@ -357,7 +392,7 @@ struct DataExportView: View {
             "# QRScanner 扫描记录导出",
             "# 范围：\(range.rawValue) 类别：\(category.rawValue) 条数：\(records.count)",
             "# 导出时间：\(formatter.string(from: Date()))",
-            "# 时间\t来源\t码制\t类型\t内容"
+            "# 时间\t来源\t码制\t类型\t车架号前5位\t内容"
         ]
         for record in records {
             lines.append([
@@ -365,6 +400,7 @@ struct DataExportView: View {
                 record.source.rawValue,
                 record.symbology,
                 record.typeName,
+                vinPrefix(of: record.content) ?? "",
                 record.content
             ].joined(separator: "\t"))
         }
@@ -422,6 +458,36 @@ struct DataExportView: View {
                 }
             }
 
+            Section(header: Text("车架号归类"),
+                    footer: Text("按车架号（VIN）前 5 位归类：前 3 位是制造商代码（WMI），前 5 位即「厂家 + 车型系列」。只识别 17 位、不含 I/O/Q 的字母数字。")) {
+                Picker("前 5 位前缀", selection: $vinPrefixFilter) {
+                    Text("全部").tag("全部")
+                    ForEach(vinPrefixGroups, id: \.prefix) { item in
+                        Text("\(item.prefix)（\(item.count) 条）").tag(item.prefix)
+                    }
+                }
+                if vinPrefixGroups.isEmpty {
+                    Text("暂无车架号记录")
+                        .font(.system(size: 13))
+                        .foregroundColor(.secondary)
+                }
+            }
+
+            if !vinPrefixGroups.isEmpty {
+                Section(header: Text("前缀分布（归类结果）")) {
+                    ForEach(vinPrefixGroups.prefix(12), id: \.prefix) { item in
+                        HStack {
+                            Text(item.prefix)
+                                .font(.system(size: 14, weight: .medium, design: .monospaced))
+                            Spacer()
+                            Text("\(item.count) 条")
+                                .font(.system(size: 13))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+            }
+
             Section(header: Text("文件格式")) {
                 Picker("选择格式", selection: $format) {
                     ForEach(ExportFormat.allCases) { Text($0.rawValue).tag($0) }
@@ -443,6 +509,11 @@ struct DataExportView: View {
                     Text("相机扫码 / 相册识别")
                     Spacer()
                     Text("\(cameraCount) / \(libraryCount)").foregroundColor(.secondary)
+                }
+                HStack {
+                    Text("含车架号 / 前缀数")
+                    Spacer()
+                    Text("\(vinRecordCount) / \(vinPrefixGroups.count)").foregroundColor(.secondary)
                 }
             }
 
