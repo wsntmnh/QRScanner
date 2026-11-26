@@ -249,17 +249,6 @@ enum ExportTimeRange: String, CaseIterable, Identifiable {
     }
 }
 
-/// 导出类别：可按码的形状或来源归类
-enum ExportCategory: String, CaseIterable, Identifiable {
-    case all = "全部"
-    case qrcode = "二维码"
-    case barcode = "条形码"
-    case camera = "相机扫码"
-    case library = "相册识别"
-
-    var id: String { rawValue }
-}
-
 /// 导出格式
 enum ExportFormat: String, CaseIterable, Identifiable {
     case csv = "CSV（Excel 可打开）"
@@ -300,7 +289,6 @@ struct DataExportView: View {
     @State private var range: ExportTimeRange = .all
     /// 「指定某一天」用的日期
     @State private var selectedDay = Date()
-    @State private var category: ExportCategory = .all
     @State private var format: ExportFormat = .csv
     /// 车架号（VIN）前 5 位前缀筛选，"全部" 表示不按前缀过滤
     @State private var vinPrefixFilter = "全部"
@@ -313,19 +301,12 @@ struct DataExportView: View {
 
     // MARK: 数据整理
 
-    /// 按「时间范围 + 类别 + 车架号前缀」筛选后的记录（保持最新在前）
+    /// 按「时间范围 + 车架号前缀」筛选后的记录（保持最新在前）
     private var exportRecords: [ScanRecord] {
         let bounds = range.interval(selectedDay: selectedDay)
         return historyManager.records.filter { record in
             if let start = bounds.start, record.timestamp < start { return false }
             if let end = bounds.end, record.timestamp >= end { return false }
-            switch category {
-            case .all: break
-            case .qrcode: if record.isBarcode { return false }
-            case .barcode: if !record.isBarcode { return false }
-            case .camera: if record.source != .camera { return false }
-            case .library: if record.source != .photoLibrary { return false }
-            }
             if vinOnly, vinString(of: record.content) == nil { return false }
             if vinPrefixFilter != "全部" {
                 guard let prefix = vinPrefix(of: record.content), prefix == vinPrefixFilter else { return false }
@@ -348,6 +329,33 @@ struct DataExportView: View {
         vinString(of: content).map { String($0.prefix(5)) }
     }
 
+    /// 车架号前 5 位 / 前 3 位（WMI）对应的品牌名。
+    /// 5 位优先（同厂家不同车型系列），认不出 5 位再退回 3 位 WMI；都没有则只显示前缀。
+    /// 需要补品牌时，直接在这里加一行即可。
+    private static let vinBrands: [String: String] = [
+        // 5 位：具体车型系列
+        "LSJEM": "尚界",
+        "LSJEK": "荣威",
+        // 3 位：WMI 厂家（作为兜底）
+        "LSV": "上汽大众",
+        "LFV": "一汽-大众",
+        "LSG": "上汽通用",
+        "LSJ": "上汽乘用车",
+        "LGB": "东风日产",
+        "LGW": "长城汽车",
+        "LVG": "广汽丰田",
+        "LHG": "广汽本田",
+        "LFM": "一汽丰田",
+        "LZW": "上汽通用五菱",
+        "LVS": "长安福特",
+        "LDC": "神龙汽车"
+    ]
+
+    private func brandName(for prefix: String) -> String? {
+        if let exact = Self.vinBrands[prefix] { return exact }
+        return Self.vinBrands[String(prefix.prefix(3))]
+    }
+
     /// 现有记录里的车架号前缀分布（按条数降序）
     private var vinPrefixGroups: [(prefix: String, count: Int)] {
         var counts: [String: Int] = [:]
@@ -365,11 +373,6 @@ struct DataExportView: View {
     private var vinRecordCount: Int {
         exportRecords.filter { vinPrefix(of: $0.content) != nil }.count
     }
-
-    private var qrCount: Int { exportRecords.filter { !$0.isBarcode }.count }
-    private var barcodeCount: Int { exportRecords.filter { $0.isBarcode }.count }
-    private var cameraCount: Int { exportRecords.filter { $0.source == .camera }.count }
-    private var libraryCount: Int { exportRecords.filter { $0.source == .photoLibrary }.count }
 
     // MARK: 文本生成
 
@@ -443,7 +446,7 @@ struct DataExportView: View {
 
         var lines: [String] = [
             "# QRScanner 扫描记录导出",
-            "# 范围：\(range.rawValue) 类别：\(category.rawValue) 条数：\(records.count)",
+            "# 范围：\(range.rawValue) 条数：\(records.count)",
             "# 导出时间：\(formatter.string(from: Date()))",
             "# 时间\t来源\t码制\t类型\t内容"
         ]
@@ -521,13 +524,7 @@ struct DataExportView: View {
                 if range == .day {
                     DatePicker("选择日期", selection: $selectedDay, displayedComponents: .date)
                         .datePickerStyle(.compact)
-                }
-            }
-
-            Section(header: Text("类别（归类）"),
-                    footer: Text("按码的形状或来源归类，只导出所选类别。")) {
-                Picker("选择类别", selection: $category) {
-                    ForEach(ExportCategory.allCases) { Text($0.rawValue).tag($0) }
+                        .environment(\.locale, Locale(identifier: "zh_CN"))
                 }
             }
 
@@ -546,7 +543,11 @@ struct DataExportView: View {
                 Picker("前 5 位前缀", selection: $vinPrefixFilter) {
                     Text("全部").tag("全部")
                     ForEach(vinPrefixGroups, id: \.prefix) { item in
-                        Text("\(item.prefix)（\(item.count) 条）").tag(item.prefix)
+                        if let brand = brandName(for: item.prefix) {
+                            Text("\(item.prefix) · \(brand)（\(item.count) 条）").tag(item.prefix)
+                        } else {
+                            Text("\(item.prefix)（\(item.count) 条）").tag(item.prefix)
+                        }
                     }
                 }
                 if vinPrefixGroups.isEmpty {
@@ -559,9 +560,17 @@ struct DataExportView: View {
             if !vinPrefixGroups.isEmpty {
                 Section(header: Text("前缀分布（归类结果）")) {
                     ForEach(vinPrefixGroups.prefix(12), id: \.prefix) { item in
-                        HStack {
+                        HStack(spacing: 8) {
                             Text(item.prefix)
                                 .font(.system(size: 14, weight: .medium, design: .monospaced))
+                            if let brand = brandName(for: item.prefix) {
+                                Text(brand)
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundColor(.blue)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Capsule().fill(Color.blue.opacity(0.12)))
+                            }
                             Spacer()
                             Text("\(item.count) 条")
                                 .font(.system(size: 13))
@@ -582,16 +591,6 @@ struct DataExportView: View {
                     Text("可导出")
                     Spacer()
                     Text("\(exportRecords.count) 条").foregroundColor(.secondary)
-                }
-                HStack {
-                    Text("其中二维码 / 条形码")
-                    Spacer()
-                    Text("\(qrCount) / \(barcodeCount)").foregroundColor(.secondary)
-                }
-                HStack {
-                    Text("相机扫码 / 相册识别")
-                    Spacer()
-                    Text("\(cameraCount) / \(libraryCount)").foregroundColor(.secondary)
                 }
                 HStack {
                     Text("含车架号 / 前缀数")
