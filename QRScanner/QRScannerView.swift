@@ -23,6 +23,8 @@ class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsD
     private let scanCooldown: TimeInterval = 1.5
     private var device: AVCaptureDevice?
     private var pendingWatermarkContent: String?
+    /// 用户当前想要的手电筒状态（用于停工/换镜头/拍照后把状态与 UI 对齐）
+    private var desiredTorchOn = false
 
     // MARK: - Vision 条形码兜底识别
     /// 条形码（尤其细窄、弯曲、反光的一维码）用系统元数据输出经常读不出，
@@ -149,6 +151,10 @@ class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsD
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             if self?.captureSession?.isRunning == false {
                 self?.captureSession?.startRunning()
+                // Session 重启会把灯关掉，用户此前开着灯则补回来
+                if self?.desiredTorchOn == true {
+                    self?.setTorch(on: true)
+                }
             }
         }
     }
@@ -163,6 +169,11 @@ class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsD
 
     // MARK: - 暂停取景（用于照片预览期间省电、降温）
     func pauseCapture() {
+        // 停掉 Session 时系统会强制把手电筒关掉，这里同步状态并通知 UI，
+        // 否则按钮会一直停留在“关闭”字样，而灯其实已经灭了
+        if desiredTorchOn {
+            setTorch(on: false)
+        }
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             self?.captureSession?.stopRunning()
         }
@@ -293,6 +304,15 @@ class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsD
                 self.applyZoom(1.0, on: newDevice)
                 // 换了镜头后沿用当前对焦方式（手动焦距保持不变）
                 self.applyFocusMode(on: newDevice)
+                // 新镜头的手电筒默认是关的，按用户意图补开；不支持则把 UI 同步为关
+                if self.desiredTorchOn {
+                    if !self.setTorch(on: true) {
+                        self.desiredTorchOn = false
+                        NotificationCenter.default.post(name: Self.torchStateDidChangeNotification, object: nil, userInfo: ["isOn": false])
+                    }
+                } else {
+                    NotificationCenter.default.post(name: Self.torchStateDidChangeNotification, object: nil, userInfo: ["isOn": false])
+                }
             }
 
             DispatchQueue.main.async {
@@ -432,7 +452,10 @@ class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsD
             if on {
                 try device.setTorchModeOn(level: 1.0)
             }
-            NotificationCenter.default.post(name: Self.torchStateDidChangeNotification, object: nil, userInfo: ["isOn": on])
+            // 以设备真实状态回传，避免 UI 与硬件不一致
+            let actualOn = device.torchMode != .off
+            desiredTorchOn = actualOn
+            NotificationCenter.default.post(name: Self.torchStateDidChangeNotification, object: nil, userInfo: ["isOn": actualOn])
             return true
         } catch {
             return false
