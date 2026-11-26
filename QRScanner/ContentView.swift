@@ -38,6 +38,9 @@ struct ContentView: View {
     // 微距：占用超广角 + 焦距锁最近
     @State private var isMacro = false
 
+    // 启动兜底：相机长时间没起来时给出可操作的提示，而不是停在空白画面
+    @State private var showBootFallback = false
+
     var body: some View {
         ZStack {
             ScannerWrapperView(onScan: { result, symbology in
@@ -234,7 +237,7 @@ struct ContentView: View {
                         .font(.system(size: 17, weight: .medium))
                         .foregroundColor(.white)
 
-                    if settings.autoSavePhoto && lastScanSource == .camera {
+                    if (settings.autoSavePhoto || settings.autoCaptureEnabled) && lastScanSource == .camera {
                         Text("正在生成预览...")
                             .font(.system(size: 13))
                             .foregroundColor(.white.opacity(0.8))
@@ -251,6 +254,41 @@ struct ContentView: View {
                 .background(Color.black.opacity(0.8))
                 .ignoresSafeArea()
                 .transition(.opacity)
+            }
+
+            // 启动兜底：相机没起来时给出明确原因与「重新初始化」按钮
+            if showBootFallback {
+                VStack(spacing: 16) {
+                    Image(systemName: "camera.badge.ellipsis")
+                        .font(.system(size: 46))
+                        .foregroundColor(.white)
+
+                    Text("相机没有启动")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundColor(.white)
+
+                    Text("请确认「设置 → QRScanner → 相机」已允许访问；\n也可以点下面按钮重新初始化相机。")
+                        .font(.system(size: 13))
+                        .foregroundColor(.white.opacity(0.8))
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 30)
+
+                    Button {
+                        showBootFallback = false
+                        scannerController?.restartCamera()
+                        scheduleBootCheck()
+                    } label: {
+                        Text("重新初始化相机")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 24)
+                            .frame(height: 42)
+                            .background(Capsule().fill(Color.blue))
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.black.opacity(0.82))
+                .ignoresSafeArea()
             }
 
             // 照片预览弹窗
@@ -291,6 +329,7 @@ struct ContentView: View {
             if settings.showLocationInWatermark {
                 LocationManager.shared.startUpdating()
             }
+            scheduleBootCheck()
         }
         .onChange(of: settings.showLocationInWatermark) { _, isOn in
             if isOn {
@@ -301,6 +340,16 @@ struct ContentView: View {
         }
         .onChange(of: settings.photoQuality) { _, _ in
             scannerController?.updateSessionPreset()
+        }
+    }
+
+    // MARK: - 启动自检
+    /// 相机初始化是异步的，等 4 秒还没拿到控制器/镜头列表就认为启动失败，弹出兜底提示。
+    private func scheduleBootCheck() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+            if scannerController == nil || lensTitles.isEmpty {
+                withAnimation { showBootFallback = true }
+            }
         }
     }
 
@@ -329,7 +378,8 @@ struct ContentView: View {
             return
         }
 
-        if settings.autoSavePhoto {
+        // 关闭了「扫描后拍照预览」时，只有开了「自动拍照」才会自动拍
+        if settings.autoSavePhoto || settings.autoCaptureEnabled {
             withAnimation {
                 showSuccess = true
             }
@@ -696,6 +746,21 @@ struct SettingsView: View {
                                 Text("扫描后拍照预览")
                                     .font(.system(size: 16))
                                 Text("识别成功后拍照并预览，手动保存")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    }
+
+                    Toggle(isOn: $settings.autoCaptureEnabled) {
+                        HStack(spacing: 12) {
+                            Image(systemName: "aperture")
+                                .foregroundColor(.green)
+                                .frame(width: 28)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("自动拍照")
+                                    .font(.system(size: 16))
+                                Text("扫到码后立即自动拍一张（不用再按拍照按钮）")
                                     .font(.system(size: 12))
                                     .foregroundColor(.secondary)
                             }
