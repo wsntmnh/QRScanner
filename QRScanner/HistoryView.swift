@@ -227,19 +227,24 @@ enum ExportTimeRange: String, CaseIterable, Identifiable {
     case today = "今天"
     case week = "近 7 天"
     case month = "近 30 天"
+    case day = "指定某一天"
     case all = "全部"
 
     var id: String { rawValue }
 
-    /// 起算时间（nil 表示不限制）
-    var startDate: Date? {
+    /// 时间区间（start 含、end 不含；nil 表示该端不限制）
+    /// 「指定某一天」取所选日期的 0 点到次日 0 点
+    func interval(selectedDay: Date) -> (start: Date?, end: Date?) {
         let calendar = Calendar.current
         let todayStart = calendar.startOfDay(for: Date())
         switch self {
-        case .today: return todayStart
-        case .week: return calendar.date(byAdding: .day, value: -6, to: todayStart)
-        case .month: return calendar.date(byAdding: .day, value: -29, to: todayStart)
-        case .all: return nil
+        case .today: return (todayStart, nil)
+        case .week: return (calendar.date(byAdding: .day, value: -6, to: todayStart), nil)
+        case .month: return (calendar.date(byAdding: .day, value: -29, to: todayStart), nil)
+        case .day:
+            let dayStart = calendar.startOfDay(for: selectedDay)
+            return (dayStart, calendar.date(byAdding: .day, value: 1, to: dayStart))
+        case .all: return (nil, nil)
         }
     }
 }
@@ -272,10 +277,29 @@ enum ExportFormat: String, CaseIterable, Identifiable {
     }
 }
 
+/// 只导出车架号时的 JSON 结构：合计条数 + 车架号清单
+private struct VinExportItem: Encodable {
+    let vin: String
+    let time: String
+}
+
+private struct VinExportPayload: Encodable {
+    let total: Int
+    let items: [VinExportItem]
+}
+
+/// 完整导出时的 JSON 结构：合计条数 + 原始记录
+private struct RecordExportPayload: Encodable {
+    let total: Int
+    let items: [ScanRecord]
+}
+
 struct DataExportView: View {
     @ObservedObject private var historyManager = HistoryManager.shared
 
     @State private var range: ExportTimeRange = .all
+    /// 「指定某一天」用的日期
+    @State private var selectedDay = Date()
     @State private var category: ExportCategory = .all
     @State private var format: ExportFormat = .csv
     /// 车架号（VIN）前 5 位前缀筛选，"全部" 表示不按前缀过滤
@@ -291,9 +315,10 @@ struct DataExportView: View {
 
     /// 按「时间范围 + 类别 + 车架号前缀」筛选后的记录（保持最新在前）
     private var exportRecords: [ScanRecord] {
-        let start = range.startDate
+        let bounds = range.interval(selectedDay: selectedDay)
         return historyManager.records.filter { record in
-            if let start = start, record.timestamp < start { return false }
+            if let start = bounds.start, record.timestamp < start { return false }
+            if let end = bounds.end, record.timestamp >= end { return false }
             switch category {
             case .all: break
             case .qrcode: if record.isBarcode { return false }
@@ -366,15 +391,16 @@ struct DataExportView: View {
 
     private func csvText(_ records: [ScanRecord]) -> String {
         if vinOnly {
-            var lines = ["车架号前5位,车架号,扫描时间"]
+            var lines = ["车架号,扫描时间"]
             for record in records {
                 guard let vin = vinString(of: record.content) else { continue }
-                lines.append([String(vin.prefix(5)), vin, record.formattedTime]
+                lines.append([vin, record.formattedTime]
                     .map(csvField).joined(separator: ","))
             }
+            lines.append("合计,\(lines.count - 1) 条")
             return lines.joined(separator: "\n")
         }
-        var lines = ["序号,时间,来源,码制,类型,车架号前5位,内容"]
+        var lines = ["序号,时间,来源,码制,类型,内容"]
         for (index, record) in records.enumerated() {
             let fields = [
                 "\(index + 1)",
@@ -382,35 +408,30 @@ struct DataExportView: View {
                 record.source.rawValue,
                 record.symbology,
                 record.typeName,
-                vinPrefix(of: record.content) ?? "",
                 record.content
             ]
             lines.append(fields.map(csvField).joined(separator: ","))
         }
+        lines.append("合计,\(records.count) 条")
         return lines.joined(separator: "\n")
     }
 
     private func jsonText(_ records: [ScanRecord]) -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .withoutEscapingSlashes]
+
         if vinOnly {
-            struct VinItem: Encodable {
-                let prefix: String
-                let vin: String
-                let time: String
-            }
-            let items = records.compactMap { record -> VinItem? in
+            let items = records.compactMap { record -> VinExportItem? in
                 guard let vin = vinString(of: record.content) else { return nil }
-                return VinItem(prefix: String(vin.prefix(5)), vin: vin, time: record.formattedTime)
+                return VinExportItem(vin: vin, time: record.formattedTime)
             }
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .withoutEscapingSlashes]
-            guard let data = try? encoder.encode(items),
+            guard let data = try? encoder.encode(VinExportPayload(total: items.count, items: items)),
                   let text = String(data: data, encoding: .utf8) else { return "" }
             return text
         }
-        let encoder = JSONEncoder()
+
         encoder.dateEncodingStrategy = .iso8601
-        encoder.outputFormatting = [.prettyPrinted, .withoutEscapingSlashes]
-        guard let data = try? encoder.encode(records),
+        guard let data = try? encoder.encode(RecordExportPayload(total: records.count, items: records)),
               let text = String(data: data, encoding: .utf8) else { return "" }
         return text
     }
@@ -424,19 +445,20 @@ struct DataExportView: View {
             "# QRScanner 扫描记录导出",
             "# 范围：\(range.rawValue) 类别：\(category.rawValue) 条数：\(records.count)",
             "# 导出时间：\(formatter.string(from: Date()))",
-            "# 时间\t来源\t码制\t类型\t车架号前5位\t内容"
+            "# 时间\t来源\t码制\t类型\t内容"
         ]
         if vinOnly {
             var vinLines: [String] = [
                 "# QRScanner 车架号导出",
                 "# 范围：\(range.rawValue)，条数：\(records.count)",
                 "# 导出时间：\(formatter.string(from: Date()))",
-                "# 车架号前5位\t车架号"
+                "# 车架号\t扫描时间"
             ]
             for record in records {
                 guard let vin = vinString(of: record.content) else { continue }
-                vinLines.append("\(vin.prefix(5))\t\(vin)")
+                vinLines.append("\(vin)\t\(record.formattedTime)")
             }
+            vinLines.append("# 合计：\(records.count) 条")
             return vinLines.joined(separator: "\n")
         }
         for record in records {
@@ -445,10 +467,10 @@ struct DataExportView: View {
                 record.source.rawValue,
                 record.symbology,
                 record.typeName,
-                vinPrefix(of: record.content) ?? "",
                 record.content
             ].joined(separator: "\t"))
         }
+        lines.append("# 合计：\(records.count) 条")
         return lines.joined(separator: "\n")
     }
 
@@ -490,9 +512,15 @@ struct DataExportView: View {
 
     var body: some View {
         List {
-            Section(header: Text("时间范围")) {
+            Section(header: Text("时间范围"),
+                    footer: Text(range == .day ? "只导出所选那一天（00:00 至次日 00:00）的记录。" : "按时间范围筛选要导出的记录。")) {
                 Picker("选择时间", selection: $range) {
                     ForEach(ExportTimeRange.allCases) { Text($0.rawValue).tag($0) }
+                }
+
+                if range == .day {
+                    DatePicker("选择日期", selection: $selectedDay, displayedComponents: .date)
+                        .datePickerStyle(.compact)
                 }
             }
 
