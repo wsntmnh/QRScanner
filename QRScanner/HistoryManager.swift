@@ -43,6 +43,27 @@ class HistoryManager: ObservableObject {
         saveRecords()
     }
 
+    /// 刚扫过的相同内容（连拍抖动 / 相机同一码反复上报）
+    func hasRecentRecord(content: String, within seconds: TimeInterval = 5) -> Bool {
+        let now = Date()
+        return records.contains { $0.content == content && now.timeIntervalSince($0.timestamp) < seconds }
+    }
+
+    /// 相同内容 + 相同方向是否已存在（去掉正在补方向的那条）
+    func hasRecord(content: String, direction: ScanRecord.VINDirection, excluding recordID: UUID?) -> Bool {
+        records.contains { $0.content == content && $0.direction == direction && $0.id != recordID }
+    }
+
+    /// 相同内容是否已存在（相册导入去重用）
+    func hasAnyRecord(content: String) -> Bool {
+        records.contains { $0.content == content }
+    }
+
+    func removeRecord(id: UUID) {
+        records.removeAll { $0.id == id }
+        saveRecords()
+    }
+
     func deleteRecord(_ record: ScanRecord) {
         records.removeAll { $0.id == record.id }
         saveRecords()
