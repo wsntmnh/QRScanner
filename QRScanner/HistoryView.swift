@@ -540,14 +540,6 @@ struct DataExportView: View {
         newBrand = ""
     }
 
-    private func deleteBrand(at offsets: IndexSet) {
-        let keys = userBrandKeys
-        for index in offsets where index < keys.count {
-            userBrands.removeValue(forKey: keys[index])
-        }
-        persistBrands()
-    }
-
     // MARK: 复制 / 分享
 
     private func copyToClipboard() {
