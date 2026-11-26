@@ -280,6 +280,8 @@ struct DataExportView: View {
     @State private var format: ExportFormat = .csv
     /// 车架号（VIN）前 5 位前缀筛选，"全部" 表示不按前缀过滤
     @State private var vinPrefixFilter = "全部"
+    /// 只导出完整车架号：开启后仅保留能被识别为完整 VIN 的记录，导出文件只含车架号
+    @State private var vinOnly = true
     @State private var copiedCount = 0
     @State private var showCopied = false
     @State private var shareURL: URL?
@@ -299,6 +301,7 @@ struct DataExportView: View {
             case .camera: if record.source != .camera { return false }
             case .library: if record.source != .photoLibrary { return false }
             }
+            if vinOnly, vinString(of: record.content) == nil { return false }
             if vinPrefixFilter != "全部" {
                 guard let prefix = vinPrefix(of: record.content), prefix == vinPrefixFilter else { return false }
             }
@@ -308,12 +311,16 @@ struct DataExportView: View {
 
     /// 车架号（VIN）判定：17 位字母数字、不含 I/O/Q（VIN 规范禁用这三个字母）。
     /// 车架号的第 1–3 位是制造商代码（WMI），前 5 位即「制造商 + 车型系列」标识，适合做归类键。
-    private func vinPrefix(of content: String) -> String? {
+    private func vinString(of content: String) -> String? {
         let value = content.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         guard value.count == 17 else { return nil }
         let allowed = CharacterSet(charactersIn: "ABCDEFGHJKLMNPRSTUVWXYZ0123456789")
         guard value.unicodeScalars.allSatisfy({ allowed.contains($0) }) else { return nil }
-        return String(value.prefix(5))
+        return value
+    }
+
+    private func vinPrefix(of content: String) -> String? {
+        vinString(of: content).map { String($0.prefix(5)) }
     }
 
     /// 现有记录里的车架号前缀分布（按条数降序）
@@ -358,6 +365,15 @@ struct DataExportView: View {
     }
 
     private func csvText(_ records: [ScanRecord]) -> String {
+        if vinOnly {
+            var lines = ["车架号前5位,车架号,扫描时间"]
+            for record in records {
+                guard let vin = vinString(of: record.content) else { continue }
+                lines.append([String(vin.prefix(5)), vin, record.formattedTime]
+                    .map(csvField).joined(separator: ","))
+            }
+            return lines.joined(separator: "\n")
+        }
         var lines = ["序号,时间,来源,码制,类型,车架号前5位,内容"]
         for (index, record) in records.enumerated() {
             let fields = [
@@ -375,6 +391,22 @@ struct DataExportView: View {
     }
 
     private func jsonText(_ records: [ScanRecord]) -> String {
+        if vinOnly {
+            struct VinItem: Encodable {
+                let prefix: String
+                let vin: String
+                let time: String
+            }
+            let items = records.compactMap { record -> VinItem? in
+                guard let vin = vinString(of: record.content) else { return nil }
+                return VinItem(prefix: String(vin.prefix(5)), vin: vin, time: record.formattedTime)
+            }
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .withoutEscapingSlashes]
+            guard let data = try? encoder.encode(items),
+                  let text = String(data: data, encoding: .utf8) else { return "" }
+            return text
+        }
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.prettyPrinted, .withoutEscapingSlashes]
@@ -394,6 +426,19 @@ struct DataExportView: View {
             "# 导出时间：\(formatter.string(from: Date()))",
             "# 时间\t来源\t码制\t类型\t车架号前5位\t内容"
         ]
+        if vinOnly {
+            var vinLines: [String] = [
+                "# QRScanner 车架号导出",
+                "# 范围：\(range.rawValue)，条数：\(records.count)",
+                "# 导出时间：\(formatter.string(from: Date()))",
+                "# 车架号前5位\t车架号"
+            ]
+            for record in records {
+                guard let vin = vinString(of: record.content) else { continue }
+                vinLines.append("\(vin.prefix(5))\t\(vin)")
+            }
+            return vinLines.joined(separator: "\n")
+        }
         for record in records {
             lines.append([
                 record.formattedTime,
@@ -460,6 +505,16 @@ struct DataExportView: View {
 
             Section(header: Text("车架号归类"),
                     footer: Text("按车架号（VIN）前 5 位归类：前 3 位是制造商代码（WMI），前 5 位即「厂家 + 车型系列」。只识别 17 位、不含 I/O/Q 的字母数字。")) {
+                Toggle(isOn: $vinOnly) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("只导出完整车架号")
+                            .font(.system(size: 16))
+                        Text(vinOnly ? "只保留 17 位完整车架号，文件里不含其他扫码内容" : "导出全部记录（含非车架号内容）")
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+                    }
+                }
+
                 Picker("前 5 位前缀", selection: $vinPrefixFilter) {
                     Text("全部").tag("全部")
                     ForEach(vinPrefixGroups, id: \.prefix) { item in
