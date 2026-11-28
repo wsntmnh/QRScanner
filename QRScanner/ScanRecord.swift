@@ -25,6 +25,7 @@ struct ScanRecord: Identifiable, Codable, Equatable {
     enum VINDirection: String, Codable, CaseIterable, Identifiable {
         case inbound = "入库"
         case outbound = "出库"
+        case transfer = "移库"
 
         var id: String { rawValue }
 
@@ -32,6 +33,7 @@ struct ScanRecord: Identifiable, Codable, Equatable {
             switch self {
             case .inbound: return "arrow.down.to.line"
             case .outbound: return "arrow.up.to.line"
+            case .transfer: return "arrow.left.arrow.right"
             }
         }
     }
