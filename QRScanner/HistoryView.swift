@@ -308,6 +308,8 @@ enum DirectionFilter: String, CaseIterable, Identifiable {
 
 struct DataExportView: View {
     @ObservedObject private var historyManager = HistoryManager.shared
+    @ObservedObject private var settings = SettingsManager.shared
+    @ObservedObject private var backup = ICloudBackupManager.shared
 
     @State private var range: ExportTimeRange = .all
     /// 「指定某一天」用的日期
@@ -576,6 +578,44 @@ struct DataExportView: View {
 
     var body: some View {
         List {
+            Section(header: Text("iCloud 备份"),
+                    footer: Text(backup.summaryText + "。开启后每次记录变化都会自动备份一份快照；iCloud 未登录时快照会存在 App 内，随 iPhone 备份一起进 iCloud。")) {
+                Toggle(isOn: $settings.iCloudAutoBackup) {
+                    HStack(spacing: 12) {
+                        Image(systemName: "icloud.and.arrow.up")
+                            .foregroundColor(.blue)
+                            .frame(width: 28)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("自动备份")
+                                .font(.system(size: 16))
+                            Text(settings.iCloudAutoBackup ? "记录有变化时自动备份" : "已关闭，需手动备份")
+                                .font(.system(size: 12))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+
+                Button {
+                    let ok = backup.backupNow()
+                    importMessage = ok ? backup.statusText : "备份失败，请稍后重试"
+                    showImportAlert = true
+                } label: {
+                    Label("立即备份", systemImage: "arrow.clockwise.icloud")
+                }
+                .disabled(historyManager.records.isEmpty)
+
+                Button {
+                    if let outcome = backup.restoreFromCloud() {
+                        importMessage = "从 iCloud 恢复完成：新增 \(outcome.added) 条，云端共 \(outcome.cloudTotal) 条"
+                    } else {
+                        importMessage = backup.statusText.isEmpty ? "iCloud 里还没有备份" : backup.statusText
+                    }
+                    showImportAlert = true
+                } label: {
+                    Label("从 iCloud 恢复", systemImage: "icloud.and.arrow.down")
+                }
+            }
+
             Section(header: Text("搜索"),
                     footer: Text(searchText.isEmpty
                                  ? "可按车架号、扫码内容、品牌名或码制搜索，结果同时作用到预览、条数和导出。"
