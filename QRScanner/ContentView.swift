@@ -298,31 +298,44 @@ struct ContentView: View {
                             .padding(.horizontal, 12)
                     }
 
-                    HStack(spacing: 14) {
+                    HStack(spacing: 10) {
                         Button {
                             confirmVINDirection(.inbound)
                         } label: {
-                            HStack(spacing: 8) {
+                            HStack(spacing: 6) {
                                 Image(systemName: "arrow.down.to.line")
                                 Text("入库")
                             }
-                            .font(.system(size: 17, weight: .semibold))
+                            .font(.system(size: 16, weight: .semibold))
                             .foregroundColor(.white)
-                            .frame(width: 130, height: 52)
+                            .frame(width: 96, height: 52)
                             .background(RoundedRectangle(cornerRadius: 12).fill(Color.green.opacity(0.85)))
                         }
 
                         Button {
                             confirmVINDirection(.outbound)
                         } label: {
-                            HStack(spacing: 8) {
+                            HStack(spacing: 6) {
                                 Image(systemName: "arrow.up.to.line")
                                 Text("出库")
                             }
-                            .font(.system(size: 17, weight: .semibold))
+                            .font(.system(size: 16, weight: .semibold))
                             .foregroundColor(.white)
-                            .frame(width: 130, height: 52)
+                            .frame(width: 96, height: 52)
                             .background(RoundedRectangle(cornerRadius: 12).fill(Color.orange.opacity(0.9)))
+                        }
+
+                        Button {
+                            confirmVINDirection(.transfer)
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "arrow.left.arrow.right")
+                                Text("移库")
+                            }
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundColor(.white)
+                            .frame(width: 96, height: 52)
+                            .background(RoundedRectangle(cornerRadius: 12).fill(Color.blue.opacity(0.9)))
                         }
                     }
 
