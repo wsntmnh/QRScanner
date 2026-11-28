@@ -869,51 +869,6 @@ struct SettingsView: View {
     var body: some View {
         NavigationView {
             List {
-                Section(header: Text("扫描记录")) {
-                    Button {
-                        showHistory = true
-                    } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: "clock.arrow.circlepath")
-                                .foregroundColor(.blue)
-                                .frame(width: 28)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("历史记录")
-                                    .font(.system(size: 16))
-                                    .foregroundColor(.primary)
-                                Text(historyManager.records.isEmpty
-                                     ? "暂无扫描记录"
-                                     : "共 \(historyManager.records.count) 条，可搜索、复制、删除")
-                                    .font(.system(size: 12))
-                                    .foregroundColor(.secondary)
-                            }
-                            Spacer()
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundColor(Color(.tertiaryLabel))
-                        }
-                    }
-
-                    NavigationLink {
-                        DataExportView()
-                    } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: "internaldrive")
-                                .foregroundColor(.teal)
-                                .frame(width: 28)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("数据")
-                                    .font(.system(size: 16))
-                                    .foregroundColor(.primary)
-                                Text(dcSummary)
-                                    .font(.system(size: 12))
-                                    .foregroundColor(.secondary)
-                            }
-                            Spacer()
-                        }
-                    }
-                }
-
                 Section(header: Text("拍照设置")) {
                     Toggle(isOn: $settings.autoSavePhoto) {
                         HStack(spacing: 12) {
@@ -1017,6 +972,51 @@ struct SettingsView: View {
                                     .font(.system(size: 12))
                                     .foregroundColor(.secondary)
                             }
+                        }
+                    }
+                }
+
+                Section(header: Text("扫描记录")) {
+                    Button {
+                        showHistory = true
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "clock.arrow.circlepath")
+                                .foregroundColor(.blue)
+                                .frame(width: 28)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("历史记录")
+                                    .font(.system(size: 16))
+                                    .foregroundColor(.primary)
+                                Text(historyManager.records.isEmpty
+                                     ? "暂无扫描记录"
+                                     : "共 \(historyManager.records.count) 条，可搜索、复制、删除")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundColor(Color(.tertiaryLabel))
+                        }
+                    }
+
+                    NavigationLink {
+                        DataExportView()
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "internaldrive")
+                                .foregroundColor(.teal)
+                                .frame(width: 28)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("数据")
+                                    .font(.system(size: 16))
+                                    .foregroundColor(.primary)
+                                Text(dcSummary)
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.secondary)
+                            }
+                            Spacer()
                         }
                     }
                 }
