@@ -281,8 +281,6 @@ enum ExportField: String, CaseIterable, Identifiable {
     case brand = "品牌"
     case direction = "入库/出库/移库"
     case time = "扫描时间"
-    case source = "来源"
-    case symbology = "码制"
 
     var id: String { rawValue }
 }
@@ -454,8 +452,6 @@ struct DataExportView: View {
                 }
             case .direction: values.append(record.direction?.rawValue ?? "未标记")
             case .time: values.append(record.formattedTime)
-            case .source: values.append(record.source.rawValue)
-            case .symbology: values.append(record.symbology)
             }
         }
         return values
@@ -647,29 +643,6 @@ struct DataExportView: View {
                     Text("暂无车架号记录")
                         .font(.system(size: 13))
                         .foregroundColor(.secondary)
-                }
-            }
-
-            if !vinPrefixGroups.isEmpty {
-                Section(header: Text("前缀分布（归类结果）")) {
-                    ForEach(vinPrefixGroups.prefix(12), id: \.prefix) { item in
-                        HStack(spacing: 8) {
-                            Text(item.prefix)
-                                .font(.system(size: 14, weight: .medium, design: .monospaced))
-                            if let brand = brandName(for: item.prefix) {
-                                Text(brand)
-                                    .font(.system(size: 11, weight: .medium))
-                                    .foregroundColor(.blue)
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .background(Capsule().fill(Color.blue.opacity(0.12)))
-                            }
-                            Spacer()
-                            Text("\(item.count) 条")
-                                .font(.system(size: 13))
-                                .foregroundColor(.secondary)
-                        }
-                    }
                 }
             }
 
