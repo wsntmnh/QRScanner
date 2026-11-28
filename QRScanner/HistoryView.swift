@@ -417,6 +417,7 @@ struct DataExportView: View {
 
     private var inboundCount: Int { exportRecords.filter { $0.direction == .inbound }.count }
     private var outboundCount: Int { exportRecords.filter { $0.direction == .outbound }.count }
+    private var transferCount: Int { exportRecords.filter { $0.direction == .transfer }.count }
 
     private var userBrandKeys: [String] { userBrands.keys.sorted() }
 
@@ -730,9 +731,9 @@ struct DataExportView: View {
                     Text("\(exportRecords.count) 条").foregroundColor(.secondary)
                 }
                 HStack {
-                    Text("入库 / 出库")
+                    Text("入库 / 出库 / 移库")
                     Spacer()
-                    Text("\(inboundCount) / \(outboundCount)").foregroundColor(.secondary)
+                    Text("\(inboundCount) / \(outboundCount) / \(transferCount)").foregroundColor(.secondary)
                 }
                 HStack {
                     Text("含车架号 / 前缀数")
