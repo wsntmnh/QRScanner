@@ -70,7 +70,7 @@ struct ContentView: View {
             ScanLineOverlay()
                 .allowsHitTesting(false)
 
-            // 顶部按钮栏（统计入口已移入设置页，这里只留设置）
+            // 顶部按钮栏
             VStack {
                 HStack {
                     Spacer()
