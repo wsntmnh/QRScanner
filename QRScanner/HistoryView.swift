@@ -331,7 +331,6 @@ struct DataExportView: View {
     @State private var showCopied = false
     @State private var shareURL: URL?
     @State private var showShare = false
-    @State private var showImporter = false
     @State private var importMessage = ""
     @State private var showImportAlert = false
 
@@ -578,44 +577,6 @@ struct DataExportView: View {
 
     var body: some View {
         List {
-            Section(header: Text("iCloud 备份"),
-                    footer: Text(backup.summaryText + "。开启后每次记录变化都会自动备份一份快照；iCloud 未登录时快照会存在 App 内，随 iPhone 备份一起进 iCloud。")) {
-                Toggle(isOn: $settings.iCloudAutoBackup) {
-                    HStack(spacing: 12) {
-                        Image(systemName: "icloud.and.arrow.up")
-                            .foregroundColor(.blue)
-                            .frame(width: 28)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("自动备份")
-                                .font(.system(size: 16))
-                            Text(settings.iCloudAutoBackup ? "记录有变化时自动备份" : "已关闭，需手动备份")
-                                .font(.system(size: 12))
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                }
-
-                Button {
-                    let ok = backup.backupNow()
-                    importMessage = ok ? backup.statusText : "备份失败，请稍后重试"
-                    showImportAlert = true
-                } label: {
-                    Label("立即备份", systemImage: "arrow.clockwise.icloud")
-                }
-                .disabled(historyManager.records.isEmpty)
-
-                Button {
-                    if let outcome = backup.restoreFromCloud() {
-                        importMessage = "从 iCloud 恢复完成：新增 \(outcome.added) 条，云端共 \(outcome.cloudTotal) 条"
-                    } else {
-                        importMessage = backup.statusText.isEmpty ? "iCloud 里还没有备份" : backup.statusText
-                    }
-                    showImportAlert = true
-                } label: {
-                    Label("从 iCloud 恢复", systemImage: "icloud.and.arrow.down")
-                }
-            }
-
             Section(header: Text("搜索"),
                     footer: Text(searchText.isEmpty
                                  ? "可按车架号、扫码内容、品牌名或码制搜索，结果同时作用到预览、条数和导出。"
@@ -793,39 +754,57 @@ struct DataExportView: View {
                 }
             }
 
-            Section(footer: Text("导入支持 TXT / CSV / JSON，重复记录（内容与方向都相同）自动跳过。")) {
-                Button {
-                    showImporter = true
-                } label: {
-                    Label("导入数据", systemImage: "square.and.arrow.down")
-                }
-
+            Section {
                 Button {
                     copyToClipboard()
                 } label: {
                     Label("复制到剪贴板", systemImage: "doc.on.doc")
                 }
                 .disabled(exportText.isEmpty)
+            }
+
+            Section(header: Text("iCloud 备份"),
+                    footer: Text(backup.summaryText + "。开启后每次记录变化都会自动备份一份快照；iCloud 未登录时快照会存在 App 内，随 iPhone 备份一起进 iCloud。")) {
+                Toggle(isOn: $settings.iCloudAutoBackup) {
+                    HStack(spacing: 12) {
+                        Image(systemName: "icloud.and.arrow.up")
+                            .foregroundColor(.blue)
+                            .frame(width: 28)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("自动备份")
+                                .font(.system(size: 16))
+                            Text(settings.iCloudAutoBackup ? "记录有变化时自动备份" : "已关闭，需手动备份")
+                                .font(.system(size: 12))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
 
                 Button {
-                    prepareShareFile()
+                    let ok = backup.backupNow()
+                    importMessage = ok ? backup.statusText : "备份失败，请稍后重试"
+                    showImportAlert = true
                 } label: {
-                    Label("导出为文件（分享/存到「文件」）", systemImage: "square.and.arrow.up")
+                    Label("立即备份", systemImage: "arrow.clockwise.icloud")
                 }
-                .disabled(exportText.isEmpty)
+                .disabled(historyManager.records.isEmpty)
+
+                Button {
+                    if let outcome = backup.restoreFromCloud() {
+                        importMessage = "从 iCloud 恢复完成：新增 \(outcome.added) 条，云端共 \(outcome.cloudTotal) 条"
+                    } else {
+                        importMessage = backup.statusText.isEmpty ? "iCloud 里还没有备份" : backup.statusText
+                    }
+                    showImportAlert = true
+                } label: {
+                    Label("从 iCloud 恢复", systemImage: "icloud.and.arrow.down")
+                }
             }
         }
         .listStyle(.insetGrouped)
         .navigationTitle("数据")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { loadBrands() }
-        .fileImporter(
-            isPresented: $showImporter,
-            allowedContentTypes: [.plainText, .commaSeparatedText, .json, .text],
-            allowsMultipleSelection: false
-        ) { result in
-            handleImport(result)
-        }
         .alert("导入结果", isPresented: $showImportAlert) {
             Button("好", role: .cancel) {}
         } message: {
@@ -849,37 +828,6 @@ struct DataExportView: View {
         }
     }
 
-    private func handleImport(_ result: Result<[URL], Error>) {
-        switch result {
-        case .failure(let error):
-            importMessage = "导入失败：\(error.localizedDescription)"
-            showImportAlert = true
-        case .success(let urls):
-            guard let url = urls.first else { return }
-            let scoped = url.startAccessingSecurityScopedResource()
-            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-            do {
-                let data = try Data(contentsOf: url)
-                guard let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .utf16) else {
-                    importMessage = "文件编码无法识别，请另存为 UTF-8"
-                    showImportAlert = true
-                    return
-                }
-                let parsed = ImportParser.parse(text: text, fileName: url.lastPathComponent)
-                guard !parsed.isEmpty else {
-                    importMessage = "没有解析到可导入的记录，请检查文件格式"
-                    showImportAlert = true
-                    return
-                }
-                let outcome = HistoryManager.shared.importRecords(parsed)
-                importMessage = "导入完成：新增 \(outcome.added) 条，跳过重复 \(outcome.duplicates) 条"
-                showImportAlert = true
-            } catch {
-                importMessage = "读取文件失败：\(error.localizedDescription)"
-                showImportAlert = true
-            }
-        }
-    }
 }
 
 /// 系统分享面板（导出文件用）
