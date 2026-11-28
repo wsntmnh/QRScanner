@@ -13,9 +13,6 @@ class HistoryManager: ObservableObject {
     static let shared = HistoryManager()
     private let key = "qr_scan_history"
 
-    /// 历史记录上限，超出后自动淘汰最旧的记录，防止 UserDefaults 无限膨胀
-    private let maxRecords = 500
-
     @Published var records: [ScanRecord] = []
 
     private init() {
@@ -26,9 +23,6 @@ class HistoryManager: ObservableObject {
     func addRecord(content: String, source: ScanRecord.ScanSource, symbology: String = "未知", direction: ScanRecord.VINDirection? = nil) -> UUID {
         let record = ScanRecord(content: content, source: source, symbology: symbology, direction: direction)
         records.insert(record, at: 0)
-        if records.count > maxRecords {
-            records = Array(records.prefix(maxRecords))
-        }
         saveRecords()
         return record.id
     }
@@ -107,7 +101,7 @@ class HistoryManager: ObservableObject {
         }
         guard added > 0 else { return (0, duplicates) }
         merged.sort { $0.timestamp > $1.timestamp }
-        records = Array(merged.prefix(maxRecords))
+        records = merged
         saveRecords()
         return (added, duplicates)
     }
