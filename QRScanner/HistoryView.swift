@@ -398,6 +398,23 @@ struct DataExportView: View {
             .map { (prefix: $0.key, count: $0.value) }
     }
 
+    /// 当前筛选结果里各品牌的条数（按条数降序，未知品牌归到「未归类」）
+    private var brandCounts: [(brand: String, count: Int)] {
+        var counts: [String: Int] = [:]
+        for record in exportRecords {
+            let brand: String
+            if let prefix = vinPrefix(of: record.content), let name = brandName(for: prefix) {
+                brand = name
+            } else {
+                brand = "未归类"
+            }
+            counts[brand, default: 0] += 1
+        }
+        return counts
+            .sorted { $0.value == $1.value ? $0.key < $1.key : $0.value > $1.value }
+            .map { (brand: $0.key, count: $0.value) }
+    }
+
     private var vinRecordCount: Int {
         exportRecords.filter { vinString(of: $0.content) != nil }.count
     }
@@ -654,6 +671,16 @@ struct DataExportView: View {
                     Text("含车架号 / 前缀数")
                     Spacer()
                     Text("\(vinRecordCount) / \(vinPrefixGroups.count)").foregroundColor(.secondary)
+                }
+                if !brandCounts.isEmpty {
+                    ForEach(brandCounts, id: \.brand) { item in
+                        HStack {
+                            Text(item.brand)
+                                .foregroundColor(item.brand == "未归类" ? .secondary : .primary)
+                            Spacer()
+                            Text("\(item.count) 条").foregroundColor(.secondary)
+                        }
+                    }
                 }
             }
 
