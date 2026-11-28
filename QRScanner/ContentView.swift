@@ -881,6 +881,24 @@ struct SettingsView: View {
                         }
                     }
 
+                    NavigationLink {
+                        DataExportView()
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "internaldrive")
+                                .foregroundColor(.teal)
+                                .frame(width: 28)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("数据")
+                                    .font(.system(size: 16))
+                                    .foregroundColor(.primary)
+                                Text(dcSummary)
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.secondary)
+                            }
+                            Spacer()
+                        }
+                    }
                 }
 
                 Section(header: Text("拍照设置")) {
@@ -1022,26 +1040,6 @@ struct SettingsView: View {
                     }
                 }
 
-                Section(header: Text("数据")) {
-                    NavigationLink {
-                        DataCenterView()
-                    } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: "internaldrive")
-                                .foregroundColor(.teal)
-                                .frame(width: 28)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("数据")
-                                    .font(.system(size: 16))
-                                    .foregroundColor(.primary)
-                                Text(dcSummary)
-                                    .font(.system(size: 12))
-                                    .foregroundColor(.secondary)
-                            }
-                            Spacer()
-                        }
-                    }
-                }
             }
             .listStyle(.insetGrouped)
             .navigationTitle("设置")
@@ -1063,159 +1061,6 @@ struct SettingsView: View {
     private var dcSummary: String {
         let n = historyManager.records.count
         return n == 0 ? "导入 / 导出 / 复制，暂无记录" : "导入 / 导出 / 复制，共 \(n) 条记录"
-    }
-}
-
-// MARK: - 数据页面（导入 / 导出 / 复制）
-struct DataCenterView: View {
-    @ObservedObject private var historyManager = HistoryManager.shared
-    @State private var showImporter = false
-    @State private var importMessage = ""
-    @State private var showImportAlert = false
-    @State private var showCopiedTip = false
-
-    var body: some View {
-        List {
-            Section(header: Text("数据"),
-                    footer: Text("导入支持 TXT / CSV / JSON，重复记录（内容与方向都相同）自动跳过；导出可按时间、方向、车架号前缀筛选，复制或分享文件；复制到剪贴板会把当前全部记录一行一条写入剪贴板。")) {
-                Button {
-                    showImporter = true
-                } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: "square.and.arrow.down")
-                            .foregroundColor(.teal)
-                            .frame(width: 28)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("导入数据")
-                                .font(.system(size: 16))
-                                .foregroundColor(.primary)
-                            Text("从「文件」选择 TXT / CSV / JSON")
-                                .font(.system(size: 12))
-                                .foregroundColor(.secondary)
-                        }
-                        Spacer()
-                    }
-                }
-
-                NavigationLink {
-                    DataExportView()
-                } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: "square.and.arrow.up")
-                            .foregroundColor(.indigo)
-                            .frame(width: 28)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("导出数据")
-                                .font(.system(size: 16))
-                                .foregroundColor(.primary)
-                            Text("按时间范围与类别整理，导出 CSV / JSON / TXT")
-                                .font(.system(size: 12))
-                                .foregroundColor(.secondary)
-                        }
-                        Spacer()
-                    }
-                }
-
-                Button {
-                    copyAllToClipboard()
-                } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: "doc.on.doc")
-                            .foregroundColor(.blue)
-                            .frame(width: 28)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("复制到剪贴板")
-                                .font(.system(size: 16))
-                                .foregroundColor(.primary)
-                            Text(historyManager.records.isEmpty
-                                 ? "暂无可复制的记录"
-                                 : "复制全部 \(historyManager.records.count) 条记录")
-                                .font(.system(size: 12))
-                                .foregroundColor(.secondary)
-                        }
-                        Spacer()
-                    }
-                }
-                .disabled(historyManager.records.isEmpty)
-            }
-        }
-        .listStyle(.insetGrouped)
-        .navigationTitle("数据")
-        .navigationBarTitleDisplayMode(.inline)
-        .fileImporter(
-            isPresented: $showImporter,
-            allowedContentTypes: [.plainText, .commaSeparatedText, .json, .text],
-            allowsMultipleSelection: false
-        ) { result in
-            handleImport(result)
-        }
-        .alert("导入结果", isPresented: $showImportAlert) {
-            Button("好", role: .cancel) {}
-        } message: {
-            Text(importMessage)
-        }
-        .overlay(alignment: .bottom) {
-            if showCopiedTip {
-                Text("已复制 \(historyManager.records.count) 条记录到剪贴板")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 18)
-                    .padding(.vertical, 12)
-                    .background(Capsule().fill(Color.black.opacity(0.8)))
-                    .padding(.bottom, 30)
-                    .transition(.opacity)
-            }
-        }
-    }
-
-    private func handleImport(_ result: Result<[URL], Error>) {
-        switch result {
-        case .failure(let error):
-            importMessage = "导入失败：\(error.localizedDescription)"
-            showImportAlert = true
-        case .success(let urls):
-            guard let url = urls.first else { return }
-            let scoped = url.startAccessingSecurityScopedResource()
-            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-            do {
-                let data = try Data(contentsOf: url)
-                guard let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .utf16) else {
-                    importMessage = "文件编码无法识别，请另存为 UTF-8"
-                    showImportAlert = true
-                    return
-                }
-                let parsed = ImportParser.parse(text: text, fileName: url.lastPathComponent)
-                guard !parsed.isEmpty else {
-                    importMessage = "没有解析到可导入的记录，请检查文件格式"
-                    showImportAlert = true
-                    return
-                }
-                let outcome = HistoryManager.shared.importRecords(parsed)
-                importMessage = "导入完成：新增 \(outcome.added) 条，跳过重复 \(outcome.duplicates) 条"
-                showImportAlert = true
-            } catch {
-                importMessage = "读取文件失败：\(error.localizedDescription)"
-                showImportAlert = true
-            }
-        }
-    }
-
-    private func copyAllToClipboard() {
-        let records = historyManager.records
-        guard !records.isEmpty else { return }
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "zh_CN")
-        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
-        var lines = ["# QRScanner 扫描记录（共 \(records.count) 条）", "# 车架号\t扫描时间\t入库/出库"]
-        for record in records {
-            lines.append("\(record.content)\t\(formatter.string(from: record.timestamp))\t\(record.direction?.rawValue ?? "未标记")")
-        }
-        UIPasteboard.general.string = lines.joined(separator: "\n")
-        UINotificationFeedbackGenerator().notificationOccurred(.success)
-        withAnimation { showCopiedTip = true }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
-            withAnimation { showCopiedTip = false }
-        }
     }
 }
 
