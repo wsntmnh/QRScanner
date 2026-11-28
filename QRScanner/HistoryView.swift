@@ -279,7 +279,7 @@ enum ExportFormat: String, CaseIterable, Identifiable {
 /// 导出内容项目：车架号（或扫码内容）始终导出，这里控制额外附加哪些项目
 enum ExportField: String, CaseIterable, Identifiable {
     case brand = "品牌"
-    case direction = "入库/出库"
+    case direction = "入库/出库/移库"
     case time = "扫描时间"
     case source = "来源"
     case symbology = "码制"
@@ -1005,7 +1005,9 @@ enum ImportParser {
             guard let content = normalize(contentRaw) else { continue }
             let timeRaw = (item["扫描时间"] as? String) ?? (item["时间"] as? String) ?? (item["timestamp"] as? String) ?? ""
             let time = makeTime(timeRaw) ?? Date()
-            let directionRaw = (item["入库/出库"] as? String) ?? (item["方向"] as? String) ?? ""
+            let directionRaw = (item["入库/出库/移库"] as? String)
+                ?? (item["入库/出库"] as? String)
+                ?? (item["方向"] as? String) ?? ""
             let symbology = (item["码制"] as? String) ?? "导入"
             result.append(ScanRecord(content: content, timestamp: time, source: .camera, symbology: symbology,
                                      direction: makeDirection(directionRaw)))
