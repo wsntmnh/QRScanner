@@ -7,6 +7,7 @@
 
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 struct HistoryView: View {
     @Environment(\.dismiss) private var dismiss
@@ -326,6 +327,9 @@ struct DataExportView: View {
     @State private var showCopied = false
     @State private var shareURL: URL?
     @State private var showShare = false
+    @State private var showImporter = false
+    @State private var importSummary: String?
+    @State private var importIsError = false
 
     private let brandMapKey = "vin_brand_map"
 
@@ -555,6 +559,40 @@ struct DataExportView: View {
         }
     }
 
+    // MARK: 导入
+
+    private func handleImport(_ result: Result<[URL], Error>) {
+        switch result {
+        case .failure(let error):
+            importIsError = true
+            importSummary = "导入失败：\(error.localizedDescription)"
+        case .success(let urls):
+            guard let url = urls.first else { return }
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            do {
+                let data = try Data(contentsOf: url)
+                guard let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .utf16) else {
+                    importIsError = true
+                    importSummary = "文件编码无法识别，请另存为 UTF-8"
+                    return
+                }
+                let parsed = ImportParser.parse(text: text, fileName: url.lastPathComponent)
+                guard !parsed.isEmpty else {
+                    importIsError = true
+                    importSummary = "没有解析到可导入的记录，请检查文件格式"
+                    return
+                }
+                let outcome = HistoryManager.shared.importRecords(parsed)
+                importIsError = false
+                importSummary = "导入完成：新增 \(outcome.added) 条，跳过重复 \(outcome.duplicates) 条"
+            } catch {
+                importIsError = true
+                importSummary = "读取文件失败：\(error.localizedDescription)"
+            }
+        }
+    }
+
     private func prepareShareFile() {
         let text = exportText
         guard !text.isEmpty else { return }
@@ -734,6 +772,21 @@ struct DataExportView: View {
                 }
             }
 
+            Section(header: Text("导入数据"),
+                    footer: Text("支持 TXT / CSV / JSON。TXT 每行一个码或一个车架号；CSV 取第一列（表头含「车架号」或「内容」时按表头找列），可带「扫描时间」「入库/出库」「码制」列；JSON 支持本 App 导出的 items 结构。重复记录（内容与方向都相同）自动跳过。")) {
+                Button {
+                    showImporter = true
+                } label: {
+                    Label("从文件导入", systemImage: "square.and.arrow.down")
+                }
+
+                if let summary = importSummary {
+                    Text(summary)
+                        .font(.system(size: 13))
+                        .foregroundColor(importIsError ? .red : .green)
+                }
+            }
+
             Section(header: Text("内容预览"),
                     footer: Text("预览只显示开头部分，复制/分享时是完整数据。")) {
                 if exportText.isEmpty {
@@ -783,6 +836,13 @@ struct DataExportView: View {
                 ShareSheet(items: [url])
             }
         }
+        .fileImporter(
+            isPresented: $showImporter,
+            allowedContentTypes: [.plainText, .commaSeparatedText, .json, .text],
+            allowsMultipleSelection: false
+        ) { result in
+            handleImport(result)
+        }
     }
 }
 
@@ -795,4 +855,175 @@ struct ShareSheet: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+}
+
+// MARK: - 导入解析
+
+/// 解析导入文件：TXT 每行一条；CSV 按表头取列；JSON 兼容本 App 导出的 items 结构
+enum ImportParser {
+    private static let timeFormats = ["yyyy-MM-dd HH:mm:ss", "yyyy/MM/dd HH:mm:ss", "yyyy-MM-dd HH:mm", "yyyy-MM-dd"]
+
+    private static func makeTime(_ raw: String) -> Date? {
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return nil }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        for pattern in timeFormats {
+            formatter.dateFormat = pattern
+            if let date = formatter.date(from: text) { return date }
+        }
+        return nil
+    }
+
+    private static func makeDirection(_ raw: String) -> ScanRecord.VINDirection? {
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.contains("入库") { return .inbound }
+        if text.contains("出库") { return .outbound }
+        return nil
+    }
+
+    private static func normalize(_ raw: String) -> String? {
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return nil }
+        return ScanRecord.vinInText(text) ?? text
+    }
+
+    static func parse(text: String, fileName: String) -> [ScanRecord] {
+        let ext = (fileName as NSString).pathExtension.lowercased()
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if ext == "json" || trimmed.hasPrefix("{") || trimmed.hasPrefix("[") {
+            let jsonRecords = parseJSON(text)
+            if !jsonRecords.isEmpty { return jsonRecords }
+        }
+        if ext == "csv" || (trimmed.contains(",") && trimmed.contains("\n")) {
+            let csvRecords = parseDelimited(text)
+            if !csvRecords.isEmpty { return csvRecords }
+        }
+        return parsePlain(text)
+    }
+
+    // MARK: TXT
+
+    private static func parsePlain(_ text: String) -> [ScanRecord] {
+        var result: [ScanRecord] = []
+        for rawLine in text.components(separatedBy: .newlines) {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            if line.isEmpty || line.hasPrefix("#") { continue }
+            // 允许「车架号<TAB>时间<TAB>方向」这样带附加列的行
+            let parts = line.components(separatedBy: "\t")
+            guard let content = normalize(parts.first ?? line) else { continue }
+            var time = Date()
+            var direction: ScanRecord.VINDirection? = nil
+            for part in parts.dropFirst() {
+                if let date = makeTime(part) { time = date }
+                if let d = makeDirection(part) { direction = d }
+            }
+            result.append(ScanRecord(content: content, timestamp: time, source: .camera, symbology: "导入", direction: direction))
+        }
+        return result
+    }
+
+    // MARK: CSV
+
+    private static func splitCSVLine(_ line: String) -> [String] {
+        var fields: [String] = []
+        var current = ""
+        var inQuotes = false
+        var iterator = Array(line).makeIterator()
+        while let ch = iterator.next() {
+            if ch == "\"" {
+                if inQuotes {
+                    if let next = iterator.next() {
+                        if next == "\"" {
+                            current.append("\"")
+                        } else {
+                            inQuotes = false
+                            if next == "," {
+                                fields.append(current)
+                                current = ""
+                            } else {
+                                current.append(next)
+                            }
+                        }
+                    } else {
+                        inQuotes = false
+                    }
+                } else {
+                    inQuotes = true
+                }
+            } else if ch == "," && !inQuotes {
+                fields.append(current)
+                current = ""
+            } else {
+                current.append(ch)
+            }
+        }
+        fields.append(current)
+        return fields.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+    }
+
+    private static func parseDelimited(_ text: String) -> [ScanRecord] {
+        let lines = text.components(separatedBy: .newlines).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+        guard !lines.isEmpty else { return [] }
+
+        let header = splitCSVLine(lines[0])
+        let looksLikeHeader = header.contains { field in
+            let f = field.trimmingCharacters(in: .whitespaces)
+            return f.contains("车架号") || f.contains("内容") || f.uppercased().contains("VIN") || f.contains("扫描时间")
+        }
+        guard looksLikeHeader else {
+            return parsePlain(text)
+        }
+
+        func index(of keywords: [String]) -> Int? {
+            header.firstIndex { field in keywords.contains { field.contains($0) } }
+        }
+        let contentIndex = index(of: ["车架号", "内容", "VIN", "vin"])
+        let timeIndex = index(of: ["扫描时间", "时间"])
+        let directionIndex = index(of: ["入库", "出库", "方向"])
+        let symbologyIndex = index(of: ["码制"])
+
+        var result: [ScanRecord] = []
+        for line in lines.dropFirst() {
+            let fields = splitCSVLine(line)
+            if fields.count == 1 && (fields[0].hasPrefix("合计")) { continue }
+            guard let ci = contentIndex, ci < fields.count, let content = normalize(fields[ci]) else { continue }
+            let time = timeIndex.flatMap { $0 < fields.count ? makeTime(fields[$0]) : nil } ?? Date()
+            let direction = directionIndex.flatMap { $0 < fields.count ? makeDirection(fields[$0]) : nil }
+            let symbology = symbologyIndex.flatMap { $0 < fields.count && !fields[$0].isEmpty ? fields[$0] : nil } ?? "导入"
+            result.append(ScanRecord(content: content, timestamp: time, source: .camera, symbology: symbology, direction: direction))
+        }
+        return result
+    }
+
+    // MARK: JSON
+
+    private static func parseJSON(_ text: String) -> [ScanRecord] {
+        guard let data = text.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) else { return [] }
+
+        var items: [[String: Any]] = []
+        if let array = object as? [[String: Any]] {
+            items = array
+        } else if let root = object as? [String: Any], let list = root["items"] as? [[String: Any]] {
+            items = list
+        }
+
+        var result: [ScanRecord] = []
+        for item in items {
+            let contentRaw = (item["车架号"] as? String)
+                ?? (item["内容"] as? String)
+                ?? (item["扫码内容"] as? String)
+                ?? (item["content"] as? String)
+                ?? ""
+            guard let content = normalize(contentRaw) else { continue }
+            let timeRaw = (item["扫描时间"] as? String) ?? (item["时间"] as? String) ?? (item["timestamp"] as? String) ?? ""
+            let time = makeTime(timeRaw) ?? Date()
+            let directionRaw = (item["入库/出库"] as? String) ?? (item["方向"] as? String) ?? ""
+            let symbology = (item["码制"] as? String) ?? "导入"
+            result.append(ScanRecord(content: content, timestamp: time, source: .camera, symbology: symbology,
+                                     direction: makeDirection(directionRaw)))
+        }
+        return result
+    }
 }
