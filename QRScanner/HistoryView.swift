@@ -292,6 +292,7 @@ enum DirectionFilter: String, CaseIterable, Identifiable {
     case all = "全部"
     case inbound = "仅入库"
     case outbound = "仅出库"
+    case transfer = "仅移库"
 
     var id: String { rawValue }
 
@@ -300,6 +301,7 @@ enum DirectionFilter: String, CaseIterable, Identifiable {
         case .all: return nil
         case .inbound: return .inbound
         case .outbound: return .outbound
+        case .transfer: return .transfer
         }
     }
 }
@@ -574,21 +576,6 @@ struct DataExportView: View {
 
     var body: some View {
         List {
-            Section(header: Text("导入数据"),
-                    footer: Text("支持 TXT / CSV / JSON，重复记录（内容与方向都相同）自动跳过。")) {
-                Button {
-                    showImporter = true
-                } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: "square.and.arrow.down")
-                            .foregroundColor(.teal)
-                        Text("从「文件」导入")
-                            .foregroundColor(.primary)
-                        Spacer()
-                    }
-                }
-            }
-
             Section(header: Text("搜索"),
                     footer: Text(searchText.isEmpty
                                  ? "可按车架号、扫码内容、品牌名或码制搜索，结果同时作用到预览、条数和导出。"
@@ -625,8 +612,8 @@ struct DataExportView: View {
                 }
             }
 
-            Section(header: Text("入库 / 出库"),
-                    footer: Text("入库、出库分开记录，可分别导出，也可以一次导出全部。")) {
+            Section(header: Text("入库 / 出库 / 移库"),
+                    footer: Text("入库、出库、移库分开记录，可分别导出，也可以一次导出全部。")) {
                 Picker("选择方向", selection: $directionFilter) {
                     ForEach(DirectionFilter.allCases) { Text($0.rawValue).tag($0) }
                 }
@@ -766,7 +753,13 @@ struct DataExportView: View {
                 }
             }
 
-            Section {
+            Section(footer: Text("导入支持 TXT / CSV / JSON，重复记录（内容与方向都相同）自动跳过。")) {
+                Button {
+                    showImporter = true
+                } label: {
+                    Label("导入数据", systemImage: "square.and.arrow.down")
+                }
+
                 Button {
                     copyToClipboard()
                 } label: {
@@ -880,6 +873,7 @@ enum ImportParser {
 
     private static func makeDirection(_ raw: String) -> ScanRecord.VINDirection? {
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.contains("移库") { return .transfer }
         if text.contains("入库") { return .inbound }
         if text.contains("出库") { return .outbound }
         return nil
