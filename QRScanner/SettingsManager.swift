@@ -23,6 +23,7 @@ class SettingsManager: ObservableObject {
     private let watermarkColorKey = "watermark_color_key"
     private let watermarkFontScaleKey = "watermark_font_scale"
     private let watermarkCustomColorKey = "watermark_custom_color_hex"
+    private let iCloudAutoBackupKey = "icloud_auto_backup_enabled"
     
     // MARK: 水印文字颜色选项
     enum WatermarkColor: String, CaseIterable, Identifiable {
@@ -155,6 +156,13 @@ class SettingsManager: ObservableObject {
         }
     }
     
+    /// iCloud 自动备份：记录变化后自动写一份快照
+    @Published var iCloudAutoBackup: Bool {
+        didSet {
+            UserDefaults.standard.set(iCloudAutoBackup, forKey: iCloudAutoBackupKey)
+        }
+    }
+
     @Published var playShutterSound: Bool {
         didSet {
             UserDefaults.standard.set(playShutterSound, forKey: playShutterSoundKey)
@@ -221,6 +229,7 @@ class SettingsManager: ObservableObject {
     private init() {
         self.autoSavePhoto = UserDefaults.standard.bool(forKey: autoSavePhotoKey)
         self.playShutterSound = UserDefaults.standard.object(forKey: playShutterSoundKey) as? Bool ?? true
+        self.iCloudAutoBackup = UserDefaults.standard.object(forKey: iCloudAutoBackupKey) as? Bool ?? true
         
         let savedQuality = UserDefaults.standard.string(forKey: photoQualityKey)
         self.photoQuality = PhotoQuality.allCases.first { $0.rawValue == savedQuality } ?? .photo
