@@ -88,6 +88,30 @@ class HistoryManager: ObservableObject {
         }
     }
 
+
+    /// 批量导入（来自 TXT / CSV / JSON 文件）。
+    /// 去重口径：内容 + 方向都相同才视为重复；保留文件里的原始时间。
+    @discardableResult
+    func importRecords(_ incoming: [ScanRecord]) -> (added: Int, duplicates: Int) {
+        var added = 0
+        var duplicates = 0
+        var merged = records
+        for item in incoming {
+            let isDuplicate = merged.contains { $0.content == item.content && $0.direction == item.direction }
+            if isDuplicate {
+                duplicates += 1
+                continue
+            }
+            merged.append(item)
+            added += 1
+        }
+        guard added > 0 else { return (0, duplicates) }
+        merged.sort { $0.timestamp > $1.timestamp }
+        records = Array(merged.prefix(maxRecords))
+        saveRecords()
+        return (added, duplicates)
+    }
+
     private func saveRecords() {
         if let encoded = try? JSONEncoder().encode(records) {
             UserDefaults.standard.set(encoded, forKey: key)
