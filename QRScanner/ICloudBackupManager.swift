@@ -133,11 +133,6 @@ final class ICloudBackupManager: ObservableObject {
         return attrs?[.modificationDate] as? Date
     }
 
-    /// 备份是否可用：iCloud 已登录，或本地快照文件存在
-    var isAvailable: Bool {
-        cloudAvailable || FileManager.default.ubiquityIdentityToken != nil
-    }
-
     var summaryText: String {
         let n = HistoryManager.shared.records.count
         guard let date = lastBackupDate else {
