@@ -116,6 +116,8 @@ class HistoryManager: ObservableObject {
         if let encoded = try? JSONEncoder().encode(records) {
             UserDefaults.standard.set(encoded, forKey: key)
         }
+        // 记录变动后自动往 iCloud 备份一份（开关在「数据」页里控制）
+        ICloudBackupManager.shared.scheduleAutoBackup()
     }
 
     private func loadRecords() {
