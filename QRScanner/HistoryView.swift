@@ -327,6 +327,9 @@ struct DataExportView: View {
     @State private var showCopied = false
     @State private var shareURL: URL?
     @State private var showShare = false
+    @State private var showImporter = false
+    @State private var importMessage = ""
+    @State private var showImportAlert = false
 
     private let brandMapKey = "vin_brand_map"
 
@@ -571,6 +574,21 @@ struct DataExportView: View {
 
     var body: some View {
         List {
+            Section(header: Text("导入数据"),
+                    footer: Text("支持 TXT / CSV / JSON，重复记录（内容与方向都相同）自动跳过。")) {
+                Button {
+                    showImporter = true
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "square.and.arrow.down")
+                            .foregroundColor(.teal)
+                        Text("从「文件」导入")
+                            .foregroundColor(.primary)
+                        Spacer()
+                    }
+                }
+            }
+
             Section(header: Text("搜索"),
                     footer: Text(searchText.isEmpty
                                  ? "可按车架号、扫码内容、品牌名或码制搜索，结果同时作用到预览、条数和导出。"
@@ -765,9 +783,21 @@ struct DataExportView: View {
             }
         }
         .listStyle(.insetGrouped)
-        .navigationTitle("导出数据")
+        .navigationTitle("数据")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { loadBrands() }
+        .fileImporter(
+            isPresented: $showImporter,
+            allowedContentTypes: [.plainText, .commaSeparatedText, .json, .text],
+            allowsMultipleSelection: false
+        ) { result in
+            handleImport(result)
+        }
+        .alert("导入结果", isPresented: $showImportAlert) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text(importMessage)
+        }
         .overlay {
             if showCopied {
                 Text("已复制 \(copiedCount) 条记录到剪贴板")
@@ -782,6 +812,38 @@ struct DataExportView: View {
         .sheet(isPresented: $showShare) {
             if let url = shareURL {
                 ShareSheet(items: [url])
+            }
+        }
+    }
+
+    private func handleImport(_ result: Result<[URL], Error>) {
+        switch result {
+        case .failure(let error):
+            importMessage = "导入失败：\(error.localizedDescription)"
+            showImportAlert = true
+        case .success(let urls):
+            guard let url = urls.first else { return }
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            do {
+                let data = try Data(contentsOf: url)
+                guard let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .utf16) else {
+                    importMessage = "文件编码无法识别，请另存为 UTF-8"
+                    showImportAlert = true
+                    return
+                }
+                let parsed = ImportParser.parse(text: text, fileName: url.lastPathComponent)
+                guard !parsed.isEmpty else {
+                    importMessage = "没有解析到可导入的记录，请检查文件格式"
+                    showImportAlert = true
+                    return
+                }
+                let outcome = HistoryManager.shared.importRecords(parsed)
+                importMessage = "导入完成：新增 \(outcome.added) 条，跳过重复 \(outcome.duplicates) 条"
+                showImportAlert = true
+            } catch {
+                importMessage = "读取文件失败：\(error.localizedDescription)"
+                showImportAlert = true
             }
         }
     }
