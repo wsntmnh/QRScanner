@@ -327,9 +327,6 @@ struct DataExportView: View {
     @State private var showCopied = false
     @State private var shareURL: URL?
     @State private var showShare = false
-    @State private var showImporter = false
-    @State private var importSummary: String?
-    @State private var importIsError = false
 
     private let brandMapKey = "vin_brand_map"
 
@@ -559,40 +556,6 @@ struct DataExportView: View {
         }
     }
 
-    // MARK: 导入
-
-    private func handleImport(_ result: Result<[URL], Error>) {
-        switch result {
-        case .failure(let error):
-            importIsError = true
-            importSummary = "导入失败：\(error.localizedDescription)"
-        case .success(let urls):
-            guard let url = urls.first else { return }
-            let scoped = url.startAccessingSecurityScopedResource()
-            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-            do {
-                let data = try Data(contentsOf: url)
-                guard let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .utf16) else {
-                    importIsError = true
-                    importSummary = "文件编码无法识别，请另存为 UTF-8"
-                    return
-                }
-                let parsed = ImportParser.parse(text: text, fileName: url.lastPathComponent)
-                guard !parsed.isEmpty else {
-                    importIsError = true
-                    importSummary = "没有解析到可导入的记录，请检查文件格式"
-                    return
-                }
-                let outcome = HistoryManager.shared.importRecords(parsed)
-                importIsError = false
-                importSummary = "导入完成：新增 \(outcome.added) 条，跳过重复 \(outcome.duplicates) 条"
-            } catch {
-                importIsError = true
-                importSummary = "读取文件失败：\(error.localizedDescription)"
-            }
-        }
-    }
-
     private func prepareShareFile() {
         let text = exportText
         guard !text.isEmpty else { return }
@@ -772,21 +735,6 @@ struct DataExportView: View {
                 }
             }
 
-            Section(header: Text("导入数据"),
-                    footer: Text("支持 TXT / CSV / JSON。TXT 每行一个码或一个车架号；CSV 取第一列（表头含「车架号」或「内容」时按表头找列），可带「扫描时间」「入库/出库」「码制」列；JSON 支持本 App 导出的 items 结构。重复记录（内容与方向都相同）自动跳过。")) {
-                Button {
-                    showImporter = true
-                } label: {
-                    Label("从文件导入", systemImage: "square.and.arrow.down")
-                }
-
-                if let summary = importSummary {
-                    Text(summary)
-                        .font(.system(size: 13))
-                        .foregroundColor(importIsError ? .red : .green)
-                }
-            }
-
             Section(header: Text("内容预览"),
                     footer: Text("预览只显示开头部分，复制/分享时是完整数据。")) {
                 if exportText.isEmpty {
@@ -835,13 +783,6 @@ struct DataExportView: View {
             if let url = shareURL {
                 ShareSheet(items: [url])
             }
-        }
-        .fileImporter(
-            isPresented: $showImporter,
-            allowedContentTypes: [.plainText, .commaSeparatedText, .json, .text],
-            allowsMultipleSelection: false
-        ) { result in
-            handleImport(result)
         }
     }
 }
