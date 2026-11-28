@@ -316,8 +316,8 @@ struct DataExportView: View {
     @State private var directionFilter: DirectionFilter = .all
     /// 车架号（VIN）前 5 位前缀筛选，"全部" 表示不按前缀过滤
     @State private var vinPrefixFilter = "全部"
-    /// 只导出完整车架号：开启后仅保留能被识别为完整 VIN 的记录
-    @State private var vinOnly = true
+    /// 只导出完整车架号（归类页已移除，默认导出全部记录）
+    @State private var vinOnly = false
     /// 导出内容项目（车架号/内容之外的附加项）
     @State private var fields: Set<ExportField> = [.brand, .direction, .time]
     /// 手动添加的品牌前缀
@@ -614,35 +614,6 @@ struct DataExportView: View {
                     footer: Text("入库、出库、移库分开记录，可分别导出，也可以一次导出全部。")) {
                 Picker("选择方向", selection: $directionFilter) {
                     ForEach(DirectionFilter.allCases) { Text($0.rawValue).tag($0) }
-                }
-            }
-
-            Section(header: Text("车架号归类"),
-                    footer: Text("按车架号（VIN）前 5 位归类：前 3 位是制造商代码（WMI），前 5 位即「厂家 + 车型系列」。只识别 17 位、不含 I/O/Q 的字母数字。")) {
-                Toggle(isOn: $vinOnly) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("只导出完整车架号")
-                            .font(.system(size: 16))
-                        Text(vinOnly ? "只保留 17 位完整车架号，不含其他扫码内容" : "导出全部记录（含非车架号内容）")
-                            .font(.system(size: 12))
-                            .foregroundColor(.secondary)
-                    }
-                }
-
-                Picker("前 5 位前缀", selection: $vinPrefixFilter) {
-                    Text("全部").tag("全部")
-                    ForEach(vinPrefixGroups, id: \.prefix) { item in
-                        if let brand = brandName(for: item.prefix) {
-                            Text("\(item.prefix) · \(brand)（\(item.count) 条）").tag(item.prefix)
-                        } else {
-                            Text("\(item.prefix)（\(item.count) 条）").tag(item.prefix)
-                        }
-                    }
-                }
-                if vinPrefixGroups.isEmpty {
-                    Text("暂无车架号记录")
-                        .font(.system(size: 13))
-                        .foregroundColor(.secondary)
                 }
             }
 
