@@ -46,6 +46,10 @@ struct ContentView: View {
     @State private var pendingDirectionText: String?
     @State private var pendingPhoto: UIImage?
     @State private var showDirectionPicker = false
+    /// 识别成功后立刻展示的照片（成功遮罩 / 方向选择里都显示）
+    @State private var scanThumb: UIImage?
+    /// 只为在结果里显示照片而拍的这一张：不进预览、不保存
+    @State private var captureForThumbOnly = false
 
     var body: some View {
         ZStack {
@@ -243,8 +247,15 @@ struct ContentView: View {
                         .font(.system(size: 17, weight: .medium))
                         .foregroundColor(.white)
 
-                    if settings.autoSavePhoto && lastScanSource == .camera {
-                        Text("正在生成预览...")
+                    if let thumb = scanThumb {
+                        Image(uiImage: thumb)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(width: 150, height: 110)
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.white.opacity(0.25), lineWidth: 1))
+                    } else if settings.autoSavePhoto && lastScanSource == .camera {
+                        Text("正在拍照...")
                             .font(.system(size: 13))
                             .foregroundColor(.white.opacity(0.8))
                     }
@@ -266,6 +277,14 @@ struct ContentView: View {
             if showDirectionPicker, let content = pendingDirectionText {
                 let vin = ScanRecord.vinInText(content)
                 VStack(spacing: 18) {
+                    if let thumb = scanThumb {
+                        Image(uiImage: thumb)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(width: 170, height: 120)
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.white.opacity(0.25), lineWidth: 1))
+                    }
                     VStack(spacing: 6) {
                         Text(vin != nil ? "识别到车架号" : "识别到扫码内容")
                             .font(.system(size: 13))
@@ -421,6 +440,7 @@ struct ContentView: View {
 
     // MARK: - 扫描结果处理
     private func handleScanResult(result: String, symbology: String, source: ScanRecord.ScanSource = .camera) {
+        scanThumb = nil
         // 内容里能找出 17 位车架号就只存车架号，导出一份干净的车架号清单
         let normalized = ScanRecord.vinInText(result) ?? result
 
@@ -472,6 +492,7 @@ struct ContentView: View {
         withAnimation { showDirectionPicker = false }
         pendingDirectionRecordID = nil
         pendingDirectionText = nil
+        captureForThumbOnly = false
 
         // 自动拍照模式下照片已拍好，选完方向再进预览
         if let image = pendingPhoto {
@@ -516,10 +537,12 @@ struct ContentView: View {
             withAnimation {
                 showSuccess = true
             }
-            // 没开自动拍照：直接弹入库/出库选择
+            // 没开「拍照预览」：仍然拍一张，仅用于在识别结果里和车架号一起显示
             pendingDirectionRecordID = recordID
             pendingDirectionText = result
+            captureForThumbOnly = true
             withAnimation { showDirectionPicker = true }
+            scannerController?.capturePhoto(playSound: false, watermarkContent: result)
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                 withAnimation {
                     showSuccess = false
@@ -531,6 +554,12 @@ struct ContentView: View {
 
     // MARK: - 照片拍摄完成，显示预览
     private func handlePhotoCaptured(image: UIImage) {
+        scanThumb = image
+        // 只为展示拍的一张：不弹预览
+        if captureForThumbOnly {
+            captureForThumbOnly = false
+            return
+        }
         // 还没选入库/出库：先弹出选择，选完再显示预览
         if pendingDirectionRecordID != nil {
             pendingPhoto = image
@@ -557,6 +586,11 @@ struct ContentView: View {
 
     // MARK: - 拍照失败：恢复界面并允许重新扫描，避免死锁
     private func handlePhotoCaptureFailed(_ message: String) {
+        // 只为展示拍的一张失败：静默忽略，不打断识别流程
+        if captureForThumbOnly {
+            captureForThumbOnly = false
+            return
+        }
         withAnimation {
             showSuccess = false
         }
